@@ -66,6 +66,8 @@ Our wedge in one sentence:
 ---
 
 ## 4. Architecture overview
+
+```
 Judge / user                            Cost
 │                                  ────
 ▼
@@ -76,12 +78,13 @@ Judge / user                            Cost
 │  UI + agent + tools + data   │
 │  all in one Python process   │
 └──────────────┬───────────────┘
-│ HTTPS, OpenAI-compat
-▼
+               │ HTTPS, OpenAI-compat
+               ▼
 ┌──────────────────────────────┐        $1.99/hr
 │ AMD MI300X droplet           │        (when ON)
 │ vLLM + Llama-3.3-70B BF16    │
 └──────────────────────────────┘
+```
 
 **Three logical pieces:**
 1. **The model** — vLLM serving Llama 70B on MI300X. Heavy, expensive.
@@ -110,9 +113,12 @@ This is critical infrastructure — implement on Day 1.
 ## 5. The agent
 
 ### Loop
+
+```
 plan → decompose → drill → cross-check → critique → report
 ↑                                          │
 └────── if evidence weak, loop back ───────┘
+```
 
 A LangGraph state machine. Each step is an explicit node. State persists
 across the whole investigation.
