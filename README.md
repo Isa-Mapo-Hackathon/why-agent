@@ -102,7 +102,7 @@ Streamlit Cloud. The model is reached via HTTPS to the AMD droplet.
 - Iteration speed: code changes don't redeploy the GPU.
 
 ### Three model backends, env-switchable
-MODEL_BACKEND=anthropic   → Claude API. Use Days 1-2 (no GPU).
+MODEL_BACKEND=minimax     → MiniMax API (MiniMax-M1). Use Days 1-2 (no GPU).
 MODEL_BACKEND=vllm        → MI300X. Use Day 3+ for integration & demo.
 MODEL_BACKEND=replay      → Pre-recorded traces. For demo when GPU off.
 
@@ -197,7 +197,7 @@ without blocking each other.
 |---|---|
 | Hosting | Streamlit Community Cloud (free, public URL) |
 | Frontend | Streamlit |
-| Backend | FastAPI in-process inside Streamlit |
+| Backend | LangGraph agent + tools (pure Python, in-process) |
 | Orchestration | LangGraph |
 | Model | Llama-3.3-70B-Instruct, BF16 |
 | Inference | vLLM on ROCm |
