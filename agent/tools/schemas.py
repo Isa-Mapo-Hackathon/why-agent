@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Shared building blocks
@@ -103,6 +103,21 @@ class InspectSchemaOutput(BaseModel):
     )
     error: str | None = None
     hint: str | None = None
+
+    @model_validator(mode="after")
+    def _require_payload_or_error(self) -> InspectSchemaOutput:
+        if self.error is None:
+            has_payload = (
+                self.tables is not None
+                or self.metrics is not None
+                or self.dimensions is not None
+                or self.table is not None
+            )
+            if not has_payload:
+                raise ValueError(
+                    "InspectSchemaOutput must set error or at least one payload field."
+                )
+        return self
 
 
 # ---------------------------------------------------------------------------
