@@ -205,9 +205,10 @@ Required env vars (see `.env.example`):
 
 ```
 MODEL_BACKEND=minimax | vllm | replay
-MINIMAX_API_KEY=...          # required when MODEL_BACKEND=minimax
-VLLM_ENDPOINT=http://...     # required when MODEL_BACKEND=vllm
-PARQUET_DIR=data/parquet     # default; override only if data engineering instructs
+MINIMAX_API_KEY=...                      # required when MODEL_BACKEND=minimax
+VLLM_ENDPOINT=http://host:8000/v1        # required when MODEL_BACKEND=vllm — include /v1
+REPLAY_SCENARIO_ID=...                   # required when MODEL_BACKEND=replay (or pass to get_llm())
+PARQUET_DIR=data/parquet                 # default; override only if data engineering instructs
 SEMANTIC_LAYER_PATH=data/semantic_layer.yml
 ```
 
