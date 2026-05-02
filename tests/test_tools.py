@@ -7,6 +7,7 @@ for run_sql; inspect_schema tests use a minimal in-memory YAML fixture.
 import duckdb
 import pytest
 
+from agent.tools.compare_periods import compare_periods
 from agent.tools.inspect_schema import inspect_schema
 from agent.tools.run_sql import build_connection, run_sql
 from agent.tools.schemas import (
@@ -70,6 +71,77 @@ def sl_path(tmp_path: pytest.TempPathFactory) -> str:
     p = tmp_path / "semantic_layer.yml"
     p.write_text(_MINIMAL_YAML)
     return str(p)
+
+
+# ---------------------------------------------------------------------------
+# compare_periods fixtures
+# ---------------------------------------------------------------------------
+
+_CP_YAML = """\
+tables:
+  events:
+    file: events.parquet
+    grain: "One row per event."
+    description: "Timestamped events with amounts."
+    columns:
+      - name: ts
+        type: TIMESTAMP
+        description: "Event time."
+      - name: amount
+        type: DOUBLE
+        description: "Amount."
+      - name: category
+        type: VARCHAR
+        description: "Category label."
+
+metrics:
+  static_total:
+    description: "Total amount across all events (static, no time filter)."
+    sql: "SELECT SUM(amount) AS value FROM events"
+    time_column: null
+
+  windowed_count:
+    description: "Count of events in a time window."
+    sql: |
+      SELECT COUNT(*) AS value FROM events
+      WHERE ts >= :start AND ts < :end
+    time_column: events.ts
+
+  windowed_sum:
+    description: "Sum of amounts in a time window."
+    sql: |
+      SELECT COALESCE(SUM(amount), 0.0) AS value FROM events
+      WHERE ts >= :start AND ts < :end
+    time_column: events.ts
+
+dimensions:
+  category:
+    description: "Event category."
+    sql: "events.category"
+    cardinality: 2
+"""
+
+
+@pytest.fixture
+def sl_cp(tmp_path: pytest.TempPathFactory) -> str:
+    p = tmp_path / "cp_layer.yml"
+    p.write_text(_CP_YAML)
+    return str(p)
+
+
+@pytest.fixture
+def conn_cp() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with 4 events: 1 in Jan 2026, 3 in Feb 2026."""
+    c = duckdb.connect()
+    c.execute("""
+        CREATE TABLE events AS SELECT * FROM (VALUES
+            (TIMESTAMP '2026-01-10 00:00:00', 10.0, 'A'),
+            (TIMESTAMP '2026-02-05 00:00:00', 20.0, 'B'),
+            (TIMESTAMP '2026-02-10 00:00:00', 30.0, 'A'),
+            (TIMESTAMP '2026-02-20 00:00:00', 40.0, 'B')
+        ) t(ts, amount, category)
+    """)
+    return c
 
 
 # ---------------------------------------------------------------------------
@@ -409,3 +481,134 @@ class TestInspectSchema:
 
         assert result.error is None
         assert "items" in result.tables
+
+
+# ---------------------------------------------------------------------------
+# compare_periods behaviour
+# ---------------------------------------------------------------------------
+
+_JAN = TimeWindow(start="2026-01-01", end="2026-02-01")
+_FEB = TimeWindow(start="2026-02-01", end="2026-03-01")
+_EMPTY = TimeWindow(start="2025-01-01", end="2025-02-01")
+
+
+class TestComparePeriods:
+    def test_static_metric_same_both_windows(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        # static_total = SUM(amount) = 100 regardless of window
+        result = compare_periods(
+            ComparePeriodsInput(metric="static_total", before=_JAN, after=_FEB), conn_cp, sl_cp
+        )
+
+        assert result.error is None
+        assert result.before_value == pytest.approx(100.0)
+        assert result.after_value == pytest.approx(100.0)
+        assert result.abs_delta == pytest.approx(0.0)
+        assert result.pct_delta == pytest.approx(0.0)
+
+    def test_windowed_count_positive_delta(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        # Jan: 1 event, Feb: 3 events → delta = +2
+        result = compare_periods(
+            ComparePeriodsInput(metric="windowed_count", before=_JAN, after=_FEB), conn_cp, sl_cp
+        )
+
+        assert result.error is None
+        assert result.before_value == pytest.approx(1.0)
+        assert result.after_value == pytest.approx(3.0)
+        assert result.abs_delta == pytest.approx(2.0)
+        assert result.pct_delta == pytest.approx(200.0)
+
+    def test_windowed_sum_positive_delta(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        # Jan: 10.0, Feb: 20+30+40=90.0 → delta = +80
+        result = compare_periods(
+            ComparePeriodsInput(metric="windowed_sum", before=_JAN, after=_FEB), conn_cp, sl_cp
+        )
+
+        assert result.error is None
+        assert result.before_value == pytest.approx(10.0)
+        assert result.after_value == pytest.approx(90.0)
+        assert result.abs_delta == pytest.approx(80.0)
+        assert result.pct_delta == pytest.approx(800.0)
+
+    def test_pct_delta_none_when_before_zero(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        # _EMPTY window has no events → windowed_sum = 0.0
+        result = compare_periods(
+            ComparePeriodsInput(metric="windowed_sum", before=_EMPTY, after=_JAN), conn_cp, sl_cp
+        )
+
+        assert result.error is None
+        assert result.before_value == pytest.approx(0.0)
+        assert result.pct_delta is None
+
+    def test_output_shape_has_all_fields(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        result = compare_periods(
+            ComparePeriodsInput(metric="windowed_count", before=_JAN, after=_FEB), conn_cp, sl_cp
+        )
+
+        assert hasattr(result, "before_value")
+        assert hasattr(result, "after_value")
+        assert hasattr(result, "abs_delta")
+        assert hasattr(result, "pct_delta")
+
+    def test_unknown_metric_returns_error(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        result = compare_periods(
+            ComparePeriodsInput(metric="nonexistent", before=_JAN, after=_FEB), conn_cp, sl_cp
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+        assert "nonexistent" in result.error
+
+    def test_missing_yaml_returns_error(
+        self, conn_cp: duckdb.DuckDBPyConnection, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        result = compare_periods(
+            ComparePeriodsInput(metric="windowed_count", before=_JAN, after=_FEB),
+            conn_cp,
+            str(tmp_path / "missing.yml"),
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+
+    def test_segment_filter_narrows_result(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        # Feb: category A = 1 event (30.0), category B = 2 events (20+40=60)
+        result = compare_periods(
+            ComparePeriodsInput(
+                metric="windowed_count", before=_JAN, after=_FEB, segment={"category": "A"}
+            ),
+            conn_cp,
+            sl_cp,
+        )
+
+        assert result.error is None
+        # Jan: 1 A event; Feb: 1 A event → delta = 0
+        assert result.before_value == pytest.approx(1.0)
+        assert result.after_value == pytest.approx(1.0)
+
+    def test_unknown_segment_dimension_returns_error(
+        self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
+    ) -> None:
+        result = compare_periods(
+            ComparePeriodsInput(
+                metric="windowed_count", before=_JAN, after=_FEB, segment={"bogus_dim": "x"}
+            ),
+            conn_cp,
+            sl_cp,
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
