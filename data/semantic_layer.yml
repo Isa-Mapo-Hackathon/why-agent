@@ -124,6 +124,7 @@ metrics:
       SELECT 100.0 * COUNT(n.id) / COUNT(i.id) AS value
       FROM items i LEFT JOIN item_nutrition n ON i.id = n.item_id
     time_column: null
+    decomposable: false  # uses table aliases (i, n) incompatible with GROUP BY rewrite
 
   new_nutrition_records:
     description: "Count of nutrition records first added in a time window. Time-aware."
