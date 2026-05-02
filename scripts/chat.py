@@ -25,14 +25,27 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.client import get_llm  # noqa: E402
+from agent.tools.inspect_schema import inspect_schema  # noqa: E402
 from agent.tools.run_sql import build_connection, run_sql  # noqa: E402
-from agent.tools.schemas import RunSqlInput  # noqa: E402
+from agent.tools.schemas import InspectSchemaInput, RunSqlInput  # noqa: E402
 
 SEMANTIC_LAYER_PATH = os.getenv("SEMANTIC_LAYER_PATH", "data/semantic_layer.yml")
 PARQUET_DIR = os.getenv("PARQUET_DIR", "data/parquet")
 
+_sl_path = SEMANTIC_LAYER_PATH
 _semantic_layer = Path(SEMANTIC_LAYER_PATH).read_text()
 _conn = build_connection(PARQUET_DIR)
+
+
+@tool
+def inspect_schema_tool(table: str | None = None) -> dict:
+    """List all tables / metrics / dimensions (no arg), or describe one table's columns and joins.
+
+    Always call this first — before run_sql — to confirm table and column names.
+    Returns: {tables, metrics, dimensions} overview or {table: {columns, joins}} detail.
+    """
+    result = inspect_schema(InspectSchemaInput(table=table), _sl_path)
+    return result.model_dump()
 
 
 @tool
@@ -57,7 +70,7 @@ Always use run_sql_tool to fetch data before answering. Do not guess values.
 """
 
 llm = get_llm()
-agent = create_react_agent(llm, tools=[run_sql_tool], prompt=SYSTEM_PROMPT)
+agent = create_react_agent(llm, tools=[inspect_schema_tool, run_sql_tool], prompt=SYSTEM_PROMPT)
 
 
 def chat(question: str) -> None:
