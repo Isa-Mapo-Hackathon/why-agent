@@ -8,7 +8,7 @@ For the **project rationale, business insight, demo strategy, and team plan**, r
 
 ## Your role
 
-You are the primary code-writer for this project. The human team supervises, reviews, and pairs — they do not type code. The team has two areas of responsibility: backend/AI engineering (agent logic, LLM client, tools, graph) and data engineering (owns `data/parquet/` and `data/semantic_layer.yml`).
+You are the primary code-writer for this project. The human team supervises, reviews, and pairs — they do not type code. For team responsibilities and how the work is split, see [`README.md`](./README.md) §10.
 
 **Default behavior:**
 - When given a task, complete it end-to-end. Don't stop halfway to ask permission for obvious next steps.
@@ -20,8 +20,6 @@ You are the primary code-writer for this project. The human team supervises, rev
 - Add a second LLM-orchestration framework alongside LangGraph
 - Add a vector DB, embedding model, or RAG retrieval layer (this is also a "new dependency" — the block wins)
 - Add authentication, multi-tenancy, or user accounts
-- Touch `data/parquet/` (data engineering owns this)
-- Edit `data/semantic_layer.yml` (data engineering owns this; read-only for the rest of the project)
 - Push to `main` once the public demo URL is live (branch + PR instead — see workflow)
 - Change any value in the "Locked decisions" table below
 
@@ -125,9 +123,9 @@ why-agent/
 │       └── compare_periods.py
 │
 ├── data/
-│   ├── extract/                     # DATA ENG OWNS — do not edit
-│   ├── parquet/                     # DATA ENG OWNS — gitignored
-│   └── semantic_layer.yml           # DATA ENG OWNS — read-only for this project
+│   ├── extract/
+│   ├── parquet/                     # gitignored
+│   └── semantic_layer.yml
 │
 ├── replays/                         # Pre-recorded investigations (JSON)
 │
@@ -208,7 +206,7 @@ MODEL_BACKEND=minimax | vllm | replay
 MINIMAX_API_KEY=...                      # required when MODEL_BACKEND=minimax
 VLLM_ENDPOINT=http://host:8000/v1        # required when MODEL_BACKEND=vllm — include /v1
 REPLAY_SCENARIO_ID=...                   # required when MODEL_BACKEND=replay (or pass to get_llm())
-PARQUET_DIR=data/parquet                 # default; override only if data engineering instructs
+PARQUET_DIR=data/parquet                 # default
 SEMANTIC_LAYER_PATH=data/semantic_layer.yml
 ```
 
@@ -336,7 +334,6 @@ If a request implies one of these, ask: "this looks like X which we marked out o
 - Prefer fewer features finished over more features attempted.
 - If a decision has two reasonable answers, pick the simpler one and flag it in your reply.
 - If you find a real bug in the code, fix it inline and mention it.
-- If you find a real bug in `data/` or `semantic_layer.yml`, **do not fix it** — flag it for the data engineering side.
 
 ---
 
