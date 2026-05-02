@@ -1,0 +1,165 @@
+# Semantic layer for the mealgen dev dataset.
+#
+# This file is the agent's only source of "business meaning." It is read
+# by inspect_schema and used by the LLM to plan run_sql / compare_periods
+# / decompose_metric calls. Write descriptions for the model, not for
+# humans — terse, concrete, and surface every footgun.
+#
+# STATUS: dev placeholder. The real production dataset (GitHub Archive)
+# is TBD. When it lands, this file gets rewritten end-to-end. Tools and
+# prompts must not assume the mealgen schema.
+
+dataset:
+  name: mealgen
+  status: dev
+  description: |
+    Grocery items scraped from US supermarket websites
+    (currently Whole Foods and Trader Joe's), with separately-collected
+    nutrition facts. Snapshot extracted from a personal Postgres dev
+    instance (postgres-mealgen) into parquet.
+  parquet_dir: data/dev
+  notes:
+    - "items has no time dimension — treat it as a snapshot."
+    - "item_nutrition.created_at is the only time column. Span: 2025-12-27 to 2026-03-28."
+    - "Set PARQUET_DIR=data/dev in .env for the agent to read this dataset."
+
+tables:
+  items:
+    file: items.parquet
+    grain: "One row per (store, external_id). 8627 rows."
+    description: "Grocery-item catalog snapshot. No time column."
+    columns:
+      - name: id
+        type: BIGINT
+        description: "Surrogate primary key."
+      - name: store
+        type: VARCHAR
+        description: "Source supermarket. Two values: WHOLE_FOODS, TRADER_JOES."
+        enum: [WHOLE_FOODS, TRADER_JOES]
+      - name: name
+        type: VARCHAR
+        description: "Product name as listed on the storefront."
+      - name: external_id
+        type: VARCHAR
+        description: "The store's own product identifier. Unique within a store."
+      - name: price
+        type: DOUBLE
+        description: "Listed retail price in USD. Range $0.23–$179.99, mean ~$7.91. Always populated."
+      - name: unit_size
+        type: VARCHAR
+        description: "Free-text package size like '3 Oz', '1 lb', '12 ct'. Not normalized — string parsing required."
+      - name: category_path
+        type: VARCHAR
+        description: |
+          Mixed depth: sometimes a top-level label ('Beverages'), sometimes a delimited path
+          ('Food > Meat, Seafood & Plant-based > Beef, Pork & Lamb'). Use
+          split_part(category_path, ' > ', 1) for a stable top-level slice.
+      - name: image_url
+        type: VARCHAR
+        description: "URL of the product image. Not useful for analysis."
+      - name: tags_json
+        type: VARCHAR
+        description: |
+          JSON array of lifestyle tags (e.g. '["Gluten Free","Game Night"]'). Mostly populated
+          for Trader Joe's. Filter with `tags_json LIKE '%Gluten Free%'` or json_extract.
+      - name: raw_json
+        type: VARCHAR
+        description: "Original scraped payload. Skip unless a specific field is needed."
+    joins:
+      - "items.id = item_nutrition.item_id (LEFT JOIN; only ~46% of items have nutrition)"
+
+  item_nutrition:
+    file: item_nutrition.parquet
+    grain: "One row per items.id (UNIQUE). 3984 rows."
+    description: "Parsed nutrition facts attached to an item. The only table with a time dimension."
+    columns:
+      - name: id
+        type: BIGINT
+        description: "Surrogate primary key."
+      - name: item_id
+        type: BIGINT
+        description: "Foreign key to items.id. Unique."
+      - name: nutrition
+        type: VARCHAR
+        description: |
+          JSON document OR free-text note. About 171 of 3984 rows (4%) are plain-text notes,
+          not JSON — always filter `WHERE nutrition LIKE '{%'` before json_extract or you'll get
+          'Malformed JSON' errors. Shape when valid:
+            {"parsed": {"calories": int, "total_fat_g": float, "saturated_fat_g": float,
+                        "sodium_mg": float, "total_carbohydrate_g": float, "dietary_fiber_g": float,
+                        "total_sugars_g": float, "added_sugars_g": float, "protein_g": float,
+                        "vitamin_d_mcg": float, "calcium_mg": float, "iron_mg": float, ...},
+             "serving_count": int, "serving_size_text": str, "serving_size_grams": float}
+          Cast extracted values to DOUBLE.
+      - name: created_at
+        type: TIMESTAMP
+        description: "When this nutrition record was first written. Use this for time-window comparisons."
+      - name: updated_at
+        type: TIMESTAMP
+        description: "When this row was last updated."
+    joins:
+      - "item_nutrition.item_id = items.id"
+
+# Named metrics the agent can pass to compare_periods / decompose_metric.
+# `time_column: null` means the metric is static (no before/after possible).
+metrics:
+  item_count:
+    description: "Number of distinct items in the catalog."
+    sql: "SELECT COUNT(*) AS value FROM items"
+    time_column: null
+
+  avg_price:
+    description: "Mean retail price across items, USD."
+    sql: "SELECT AVG(price) AS value FROM items"
+    time_column: null
+
+  total_catalog_value:
+    description: "Sum of all item prices, USD. Proxy for catalog breadth weighted by price."
+    sql: "SELECT SUM(price) AS value FROM items"
+    time_column: null
+
+  nutrition_coverage_pct:
+    description: "Share of items that have a nutrition record. Lower means the nutrition pipeline lags catalog growth."
+    sql: |
+      SELECT 100.0 * COUNT(n.id) / COUNT(i.id) AS value
+      FROM items i LEFT JOIN item_nutrition n ON i.id = n.item_id
+    time_column: null
+
+  new_nutrition_records:
+    description: "Count of nutrition records first added in a time window. Time-aware."
+    sql: |
+      SELECT COUNT(*) AS value FROM item_nutrition
+      WHERE created_at >= :start AND created_at < :end
+    time_column: item_nutrition.created_at
+
+  avg_calories_new_records:
+    description: "Mean calories on JSON-valid nutrition records added in a window."
+    sql: |
+      SELECT AVG(CAST(json_extract(nutrition, '$.parsed.calories') AS DOUBLE)) AS value
+      FROM item_nutrition
+      WHERE created_at >= :start AND created_at < :end AND nutrition LIKE '{%'
+    time_column: item_nutrition.created_at
+
+# Named dimensions usable in decompose_metric. Each dimension is a SQL
+# expression evaluated on the metric's grain (or a documented join).
+dimensions:
+  store:
+    description: "Source supermarket."
+    sql: "items.store"
+    cardinality: 2
+
+  category:
+    description: "Top-level product category from category_path."
+    sql: "split_part(items.category_path, ' > ', 1)"
+    cardinality: ~30
+
+  price_band:
+    description: "Coarse price tier."
+    sql: |
+      CASE
+        WHEN items.price < 3 THEN 'cheap'
+        WHEN items.price < 10 THEN 'mid'
+        WHEN items.price < 30 THEN 'premium'
+        ELSE 'luxury'
+      END
+    cardinality: 4

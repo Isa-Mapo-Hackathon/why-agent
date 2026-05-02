@@ -102,7 +102,7 @@ Streamlit Cloud. The model is reached via HTTPS to the AMD droplet.
 - Iteration speed: code changes don't redeploy the GPU.
 
 ### Three model backends, env-switchable
-MODEL_BACKEND=minimax     → MiniMax API (MiniMax-M1). Use Days 1-2 (no GPU).
+MODEL_BACKEND=minimax     → MiniMax API (MiniMax-M2.7). Use Days 1-2 (no GPU).
 MODEL_BACKEND=vllm        → MI300X. Use Day 3+ for integration & demo.
 MODEL_BACKEND=replay      → Pre-recorded traces. For demo when GPU off.
 
