@@ -8,6 +8,7 @@ import duckdb
 import pytest
 
 from agent.tools.compare_periods import compare_periods
+from agent.tools.decompose_metric import decompose_metric
 from agent.tools.inspect_schema import inspect_schema
 from agent.tools.run_sql import build_connection, run_sql
 from agent.tools.schemas import (
@@ -50,7 +51,7 @@ tables:
 metrics:
   avg_price:
     description: "Mean price."
-    sql: "SELECT AVG(price) FROM items"
+    sql: "SELECT AVG(price) AS value FROM items"
     time_column: null
   order_count:
     description: "Number of orders."
@@ -608,6 +609,237 @@ class TestComparePeriods:
             ),
             conn_cp,
             sl_cp,
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+
+
+# ---------------------------------------------------------------------------
+# decompose_metric fixtures
+# ---------------------------------------------------------------------------
+
+_DM_YAML = """\
+tables:
+  events:
+    file: events.parquet
+    grain: "One row per event."
+    description: "Timestamped events."
+    columns:
+      - name: ts
+        type: TIMESTAMP
+        description: "Event time."
+      - name: amount
+        type: DOUBLE
+        description: "Amount."
+      - name: category
+        type: VARCHAR
+        description: "Category."
+
+metrics:
+  windowed_count:
+    description: "Count of events in a time window."
+    sql: |
+      SELECT COUNT(*) AS value FROM events
+      WHERE ts >= :start AND ts < :end
+    time_column: events.ts
+
+  static_avg:
+    description: "Average amount (static)."
+    sql: "SELECT AVG(amount) AS value FROM events"
+    time_column: null
+
+dimensions:
+  category:
+    description: "Event category."
+    sql: "events.category"
+    cardinality: 3
+  amount_band:
+    description: "Coarse amount tier."
+    sql: |
+      CASE
+        WHEN events.amount < 20 THEN 'low'
+        ELSE 'high'
+      END
+    cardinality: 2
+"""
+
+_DM_WIN = TimeWindow(start="2026-01-01", end="2026-03-01")
+
+
+@pytest.fixture
+def sl_dm(tmp_path: pytest.TempPathFactory) -> str:
+    p = tmp_path / "dm_layer.yml"
+    p.write_text(_DM_YAML)
+    return str(p)
+
+
+@pytest.fixture
+def conn_dm() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB: 5 events across 3 categories (A×3, B×1, C×1)."""
+    c = duckdb.connect()
+    c.execute("""
+        CREATE TABLE events AS SELECT * FROM (VALUES
+            (TIMESTAMP '2026-01-10 00:00:00', 10.0, 'A'),
+            (TIMESTAMP '2026-01-15 00:00:00', 15.0, 'A'),
+            (TIMESTAMP '2026-01-20 00:00:00', 20.0, 'A'),
+            (TIMESTAMP '2026-02-05 00:00:00', 30.0, 'B'),
+            (TIMESTAMP '2026-02-28 00:00:00', 40.0, 'C')
+        ) t(ts, amount, category)
+    """)
+    return c
+
+
+# ---------------------------------------------------------------------------
+# decompose_metric behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestDecomposeMetric:
+    def test_returns_slices_list(self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        assert result.error is None
+        assert isinstance(result.slices, list)
+        assert len(result.slices) > 0
+
+    def test_slice_count_matches_dimension_cardinality(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        # 3 categories: A, B, C
+        assert len(result.slices) == 3
+
+    def test_slice_fields_populated(self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        s = result.slices[0]
+        assert s.dimension == "category"
+        assert s.value is not None
+        assert s.metric_value is not None
+        assert s.anomaly_score is not None
+
+    def test_metric_values_correct(self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        by_val = {s.value: s.metric_value for s in result.slices}
+        assert by_val["A"] == pytest.approx(3.0)
+        assert by_val["B"] == pytest.approx(1.0)
+        assert by_val["C"] == pytest.approx(1.0)
+
+    def test_ranked_highest_anomaly_first(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        # A has 3 events vs mean of 5/3 ≈ 1.67 — highest deviation
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        scores = [s.anomaly_score for s in result.slices if s.anomaly_score is not None]
+        assert scores == sorted(scores, reverse=True)
+        assert result.slices[0].value == "A"
+
+    def test_multiple_dimensions_combined(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count",
+                dimensions=["category", "amount_band"],
+                time_window=_DM_WIN,
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        assert result.error is None
+        # category (3 slices) + amount_band (2 slices) = 5 total
+        assert len(result.slices) == 5
+        dims_seen = {s.dimension for s in result.slices}
+        assert dims_seen == {"category", "amount_band"}
+
+    def test_static_metric_returns_error(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        # Static metrics (time_column: null) silently ignore the time window —
+        # returning a clear error is safer than wrong results the agent can't detect.
+        result = decompose_metric(
+            DecomposeMetricInput(metric="static_avg", dimensions=["category"], time_window=_DM_WIN),
+            conn_dm,
+            sl_dm,
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+        assert "time_column" in result.error
+
+    def test_unknown_metric_returns_error(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="no_such_metric", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+        assert "no_such_metric" in result.error
+
+    def test_unknown_dimension_returns_error(
+        self, conn_dm: duckdb.DuckDBPyConnection, sl_dm: str
+    ) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["bogus_dim"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            sl_dm,
+        )
+
+        assert result.error is not None
+        assert result.hint is not None
+
+    def test_missing_yaml_returns_error(
+        self, conn_dm: duckdb.DuckDBPyConnection, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        result = decompose_metric(
+            DecomposeMetricInput(
+                metric="windowed_count", dimensions=["category"], time_window=_DM_WIN
+            ),
+            conn_dm,
+            str(tmp_path / "missing.yml"),
         )
 
         assert result.error is not None
