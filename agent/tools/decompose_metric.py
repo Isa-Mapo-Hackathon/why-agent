@@ -31,6 +31,32 @@ from agent.tools.schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_metric_sql(metric_name: str, metric: dict) -> tuple[str, str | None]:
+    """Build a complete SELECT … AS value FROM messages SQL from a metric definition.
+
+    Handles bare aggregate expressions, full SELECT statements, and ratio metrics
+    (type: ratio with numerator/denominator fields). Returns (sql, error).
+    """
+    if "sql" in metric:
+        sql = metric["sql"].strip()
+        if sql.upper().startswith("SELECT"):
+            return sql, None
+        return f"SELECT {sql} AS value FROM messages", None
+
+    if metric.get("type") == "ratio":
+        num = metric.get("numerator")
+        den = metric.get("denominator")
+        if num and den:
+            return (
+                f"SELECT CAST(({num}) AS DOUBLE) / NULLIF(({den}), 0.0) AS value FROM messages",
+                None,
+            )
+        return "", f"Metric {metric_name!r} has type=ratio but is missing numerator/denominator."
+
+    return "", f"Metric {metric_name!r} has no 'sql' field and is not a recognized ratio type."
+
+
 # Matches: SELECT <agg_expr> AS value <rest>
 # Works for the flat metric SQLs in this project (no nested SELECTs before AS value).
 _SELECT_VALUE_RE = re.compile(r"^SELECT\s+(.+?)\s+AS\s+value\b", re.IGNORECASE | re.DOTALL)
@@ -166,10 +192,10 @@ def decompose_metric(
         )
 
     metric = metrics_raw[args.metric]
-    metric_sql: str | None = metric.get("sql")
-    if not metric_sql:
+    metric_sql, build_err = _resolve_metric_sql(args.metric, metric)
+    if build_err:
         return DecomposeMetricOutput(
-            error=f"Metric {args.metric!r} is missing 'sql' in the semantic layer.",
+            error=build_err,
             hint="Fix the semantic layer YAML or call inspect_schema to check metric definitions.",
         )
 

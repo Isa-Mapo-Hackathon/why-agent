@@ -85,11 +85,11 @@ def inspect_schema(
     try:
         columns = [
             ColumnInfo(
-                name=col["name"],
-                type=col["type"],
-                description=col.get("description", ""),
+                name=col_name,
+                type=col_def.get("type", "unknown"),
+                description=col_def.get("description", ""),
             )
-            for col in (t.get("columns") or [])
+            for col_name, col_def in (t.get("columns") or {}).items()
         ]
         return InspectSchemaOutput(
             table=TableSummary(
