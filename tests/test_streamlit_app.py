@@ -107,7 +107,22 @@ class TestFormatEvidence:
             {"phase": "drill", "tool_name": "run_sql", "args": {}, "output": {"error": "bad query"}}
         ]
         out = format_evidence(evidence)
-        assert "ERROR" in out.upper()
+        assert "⚠️" in out
+
+    def test_null_error_field_not_flagged(self):
+        # RunSqlOutput always serializes error: null — the null value must NOT trigger the error tag
+        from streamlit_app import format_evidence
+
+        evidence = [
+            {
+                "phase": "plan",
+                "tool_name": "run_sql",
+                "args": {},
+                "output": {"rows": [], "error": None},
+            }
+        ]
+        out = format_evidence(evidence)
+        assert "⚠️" not in out
 
     def test_multiple_entries_numbered(self):
         from streamlit_app import format_evidence
@@ -119,6 +134,33 @@ class TestFormatEvidence:
         out = format_evidence(evidence)
         assert "[1]" in out
         assert "[2]" in out
+
+
+# ---------------------------------------------------------------------------
+# looks_like_rca_question
+# ---------------------------------------------------------------------------
+
+
+class TestLooksLikeRcaQuestion:
+    def test_why_prefix(self):
+        from streamlit_app import looks_like_rca_question
+
+        assert looks_like_rca_question("Why did PR activity drop?")
+
+    def test_plain_query_not_rca(self):
+        from streamlit_app import looks_like_rca_question
+
+        assert not looks_like_rca_question("Count the category for items")
+
+    def test_case_insensitive(self):
+        from streamlit_app import looks_like_rca_question
+
+        assert looks_like_rca_question("WHY DID IT SPIKE")
+
+    def test_keyword_in_body(self):
+        from streamlit_app import looks_like_rca_question
+
+        assert looks_like_rca_question("Event count dropped last week")
 
 
 # ---------------------------------------------------------------------------

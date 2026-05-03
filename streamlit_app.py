@@ -22,6 +22,27 @@ DEMO_QUESTIONS = [
     "Why is weekend issue activity lower than weekday?",
 ]
 
+_RCA_KEYWORDS = {
+    "why",
+    "cause",
+    "reason",
+    "explain",
+    "investigate",
+    "dropped",
+    "spiked",
+    "changed",
+    "moved",
+    "decline",
+    "increased",
+    "decreased",
+    "anomaly",
+}
+
+
+def looks_like_rca_question(question: str) -> bool:
+    """Return True if the question looks like a root-cause investigation."""
+    return any(kw in question.lower() for kw in _RCA_KEYWORDS)
+
 
 def format_report(report: dict) -> str:
     """Convert a final_report dict to display markdown."""
@@ -50,7 +71,7 @@ def format_evidence(evidence: list[dict]) -> str:
         phase = e.get("phase", "?")
         tool = e.get("tool_name", "?")
         out = e.get("output", {})
-        err_tag = " ⚠️ ERROR" if "error" in out else ""
+        err_tag = " ⚠️ ERROR" if out.get("error") else ""
         snippet = json.dumps(out, default=str)[:200]
         lines.append(f"[{i}] {phase} › {tool}{err_tag}\n    {snippet}")
     return "\n\n".join(lines)
@@ -118,6 +139,14 @@ def main() -> None:
     question = pending or question
 
     if question:
+        if not looks_like_rca_question(question):
+            st.warning(
+                "why-agent is built for root-cause questions like "
+                "**'Why did PR activity drop on Oct 21 2018?'** — "
+                "try rephrasing with 'why', 'what caused', or describing a change.",
+                icon="💡",
+            )
+
         with st.spinner(f"Investigating: *{question}*"):
             report, evidence, err = run_investigation(question)
 
