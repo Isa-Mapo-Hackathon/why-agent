@@ -11,7 +11,8 @@ why we agreed on it, and who owns what. Update it when decisions change.
 
 An autonomous root-cause agent for data. User asks **"why did metric X
 move?"** — agent investigates and returns a structured report with an
-evidence chain. Built on AMD MI300X, deployed to Streamlit Community Cloud.
+evidence chain. Works against any user-provided DuckDB/Parquet dataset.
+Built on AMD MI300X, deployed to Streamlit Community Cloud.
 
 Working name: **Why Agent**. Repo name: `why-agent`.
 
@@ -157,24 +158,18 @@ smarter by reasoning better, not by having more tools.
 
 ### Dataset
 
-GitHub Archive — public, hourly snapshots of every GitHub event since 2011.
-Available as raw `.json.gz` files or via BigQuery
-(`githubarchive.day.YYYYMMDD`).
+why-agent works against **any user-provided data** — drop Parquet files
+into `data/parquet/` and point the semantic layer at them. There is no
+fixed dataset baked into the project.
 
-### Why GitHub Archive over synthetic data
+The current demo dataset is a marketing/CRM extract:
 
-- Real anomalies a judge can independently verify (e.g., known outages)
-- Dimensionally rich (event type, language, time, actor cohort)
-- Defensible against "this demo is contrived"
-
-### The slice we'll use
-
-- Window: 30–90 days around a known incident (TBD which one)
-- Filter: top ~1000 repos by activity to keep volume sane
-- Pre-explode the JSON `payload` column into typed columns for the
-  ~5 most common event types (PushEvent, PullRequestEvent, IssuesEvent,
-  WatchEvent, CreateEvent)
-- Output: ~300 MB Parquet (fits Streamlit Cloud's 1GB RAM limit)
+| File | Contents |
+|---|---|
+| `campaigns.parquet` | Campaign metadata and performance metrics |
+| `client_first_purchase_date.parquet` | Customer acquisition timeline |
+| `holidays.parquet` | Holiday calendar for seasonality context |
+| `messages.parquet` | Message-level send/open/click events |
 
 ### The semantic layer
 
@@ -226,20 +221,20 @@ without blocking each other.
 
 ### Demo scenarios (rehearsed, deterministic)
 
-1. **Why did PR activity drop on Oct 21, 2018?**
-   Expected: global drop, all event types, ~3hr window → platform outage.
-2. **Why did [language] repo stars spike during week of [TBD]?**
-   Expected: viral repo concentration.
-3. **Why is weekend issue activity 30% lower than weekday?**
+1. **Why did message open rate drop in the most recent campaign?**
+   Expected: specific campaign/segment underperformance, tied to send-time or audience slice.
+2. **Why did new customer acquisition spike in a particular month?**
+   Expected: campaign concentration or holiday effect in the acquisition data.
+3. **Why is weekend engagement consistently lower than weekday?**
    Expected: structural pattern, agent should distinguish from anomaly.
 
-Scenario 1 is our hero demo. Pick exact incident with Isa.
+Scenario 1 is our hero demo.
 
 ### One thing to verify early
 
 Run scenario 1 end-to-end on Day 3. If the agent can't reach the
-"platform outage" conclusion from the data alone, we need a different
-incident. **Don't wait until Day 5 to find out.**
+conclusion from the data alone, we need a different question. **Don't
+wait until Day 5 to find out.**
 
 ---
 
@@ -273,11 +268,9 @@ The split mirrors the architecture: Isa owns *data + meaning*,
 Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 ### Isa owns
-- GitHub Archive extraction → Parquet pipeline
+- Demo dataset — Parquet files in `data/parquet/`
 - Semantic layer YAML
-- Demo dataset (which incident, which window)
 - Ground-truth validation: "is the agent's answer actually right?"
-- Anomaly engineering for any synthetic augmentations
 - Build-in-public post about the data layer
 
 ### Mapo owns
@@ -300,9 +293,9 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 | Day | Mapo | Isa | Joint |
 |---|---|---|---|
-| **0** (pre) | Validate vLLM on MI300X, write `start_vllm.sh`, destroy droplet | Pull GitHub Archive slice, save to Parquet | Repo scaffolded, README locked |
+| **0** (pre) | Validate vLLM on MI300X, write `start_vllm.sh`, destroy droplet | Prepare demo Parquet files, drop into `data/parquet/` | Repo scaffolded, README locked |
 | **1** | Agent loop + tools against Anthropic API | Draft `semantic_layer.yml` v1 | Agree on tool I/O signatures |
-| **2** | First end-to-end agent investigation working | Refine semantic layer, prep demo scenarios | Smoke-test with mock data |
+| **2** | First end-to-end agent investigation working | Refine semantic layer, prep demo scenarios | Smoke-test with provided dataset |
 | **3** | Switch to vLLM backend, run scenario 1 live | Validate scenario 1 ground truth | First real demo run; identify gaps |
 | **4** | Prompt tuning, self-critique node | Scenario 2 + 3 ground truth | Build-in-public posts |
 | **5** | Streamlit polish, record replays, deploy to Cloud | Final dataset cleanup, write evaluation notes | Rehearse demo |
@@ -326,11 +319,11 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 1. **vLLM-on-MI300X setup stalls Day 1.** Mitigation: validate on Day 0,
    keep Anthropic API fallback always wired.
-2. **The "right answer" for our chosen incident isn't reachable from
-   the data alone.** Mitigation: pick incident on Day 0; smoke-test
-   scenario 1 by end of Day 3.
+2. **The "right answer" for our chosen scenario isn't reachable from
+   the data alone.** Mitigation: pick scenario on Day 0; smoke-test
+   end-to-end by Day 3.
 3. **Streamlit Cloud RAM limit exceeded by data + agent + LangGraph
-   process overhead.** Mitigation: keep Parquet slice ≤ 300 MB; profile
+   process overhead.** Mitigation: keep Parquet files under 300 MB total; profile
    on Day 2.
 4. **Live demo timing variance — agent takes 90s instead of 60s.**
    Mitigation: don't claim "60 seconds"; frame as "minutes vs hours."
@@ -339,10 +332,8 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 ### Open questions to resolve early
 
-- [ ] Which specific incident is our hero demo?
-- [ ] Which 30-day window does the slice cover?
-- [ ] How many repos in the top-N filter? (1000 default)
-- [ ] What `event_type` values do we explode out of the JSON payload?
+- [ ] Which specific question is our hero demo?
+- [ ] Is the semantic layer accurate enough for the demo dataset?
 - [ ] Do we pay $5 for the model-weights block volume?
 - [ ] Do we want a custom domain, or is `*.streamlit.app` fine? *(default: streamlit.app fine)*
 
@@ -375,7 +366,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 | System + critique prompts | ✅ done |
 | REPL for local testing | ✅ done |
 | Streamlit UI | ⬜ pending |
-| GitHub Archive Parquet pipeline | ⬜ pending (Isa) |
+| Demo dataset in `data/parquet/` | ✅ done |
 | Replay recording script | ⬜ pending |
 | vLLM Docker + MI300X scripts | ⬜ pending |
 
@@ -425,7 +416,6 @@ uv run streamlit run streamlit_app.py
 
 - AMD Developer Hackathon: https://lablab.ai/ai-hackathons/amd-developer
 - AMD Developer Cloud docs: https://www.amd.com/en/developer/resources/cloud-access/amd-developer-cloud.html
-- GitHub Archive: https://www.gharchive.org
 - LangGraph docs: https://langchain-ai.github.io/langgraph/
 - vLLM on ROCm: https://docs.vllm.ai/en/latest/getting_started/amd-installation.html
 - Streamlit Cloud: https://share.streamlit.io

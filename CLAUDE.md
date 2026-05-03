@@ -32,7 +32,7 @@ You are the primary code-writer for this project. The human team supervises, rev
 
 ## What this project is, in 3 lines
 
-A single LangGraph agent that investigates "why did metric X move?" by calling four tools against a DuckDB-on-Parquet slice of GitHub Archive. Read by a YAML semantic layer. Served by Llama-3.3-70B on AMD MI300X via vLLM, with MiniMax API as a dev/fallback backend. Demoed in a Streamlit app deployed to Streamlit Community Cloud.
+A single LangGraph agent that investigates "why did metric X move?" by calling four tools against any DuckDB-on-Parquet dataset the user provides. Described by a YAML semantic layer. Served by Llama-3.3-70B on AMD MI300X via vLLM, with MiniMax API as a dev/fallback backend. Demoed in a Streamlit app deployed to Streamlit Community Cloud.
 
 If a task you're given doesn't fit that shape, push back before coding.
 
