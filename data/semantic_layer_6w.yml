@@ -57,13 +57,6 @@ data_shape:
         production layer are degenerate here — every message falls into
         the "pre_purchase" / "never_purchased" bucket.
 
-    - name: convertor_split
-      description: >
-        Of 3.35M unique recipients, 350,440 (10.45%) eventually made a
-        purchase (sometime in 2021–2023, well after the 6-week window).
-        The remaining 89.55% have no purchase record. This split is the
-        primary composition dimension viable in this slice.
-
     - name: only_three_partial_months
       description: >
         Email volume by month: Apr (74K), May (4.25M), Jun (1.45M).
@@ -683,9 +676,7 @@ dimensions:
     description: Pseudo-dimension for subject-line feature flags.
     notes: |
       Each subject_with_* column is a separate boolean. WARNING: these
-      features are heavily correlated with topic and channel. The Kaggle
-      author's "emoji boost" finding is a known confounded case. NULL for
-      all 27 multichannel campaigns.
+      features are heavily correlated with topic and channel. 
 
   # --- DEGENERATE in this 6-week slice — kept for layer compatibility ---
   recipient_tenure_status:
@@ -862,120 +853,3 @@ external_events:
   # Note: iOS 15 (Sep 2021), Russian invasion (Feb 2022), Black Friday 2021/2022
   # are all OUTSIDE this 6-week demo window and have been excluded. They live
   # in the production layer (semantic_layer.yml) for the full 2-year data.
-
-# =============================================================================
-# DEMO SCENARIOS — candidate "why" questions for testing the agent
-# All scenarios are CROSS-SECTIONAL (within the 6-week window),
-# not month-over-month time series.
-# =============================================================================
-demo_scenarios:
-
-  - id: composition_eventually_converted
-    hero_candidate: true
-    question: "Why is email open rate 21.3% for recipients who eventually converted, but only 18.3% for those who never did?"
-    expected_path:
-      - confirm the gap is real (it is — 3 percentage points)
-      - decompose the gap by topic — find each topic's rate is fairly stable across the two groups
-      - decompose by channel — same finding
-      - check the *mix* of topics and channels each segment receives — find that eventually-converters disproportionately receive certain campaign types (lifecycle, transactional) while never-converters get more bulk sale_out
-      - cross-check by computing within-topic open rates for both groups
-      - "conclude: the open-rate gap is partly composition (different campaign mix), and the per-segment behavioral gap is smaller than it first appears. OR, conclude: the gap is real even within topics, suggesting the eventually-converted group genuinely engages more."
-    why_it_works: |
-      Tractable on the actual demo data. Uses the cleanest composition
-      dimension we have (eventually_converted), reaches a non-obvious
-      conclusion that requires multi-step reasoning, and lets the agent
-      either confirm or refute the naive interpretation. The punchline
-      lands with industry judges who all run lead-scoring or
-      segmentation initiatives.
-
-  - id: subject_feature_confound
-    hero_candidate: true
-    question: "Do emoji subjects boost conversion?"
-    expected_path:
-      - "naive: yes, emoji campaigns convert higher (the Kaggle author's finding)"
-      - decompose by topic — find emoji is concentrated in certain topics (especially sale_out and event)
-      - control for topic — find the effect dramatically reduced or reversed
-      - conclude the apparent boost is confounded by topic mix
-    why_it_works: |
-      Documented in the Kaggle author's own notebook — guaranteed reproducible.
-      The agent gets to catch a trap that even the dataset's author fell into.
-
-  - id: composition_topic_within_channel
-    question: "Why do bulk emails have lower open rates than transactional emails?"
-    expected_path:
-      - confirm the gap (transactional much higher)
-      - decompose by topic within each message_type
-      - find the gap is a mix of behavior (transactional inherently more engaging) and composition (transactional concentrated in specific high-engagement topics)
-      - quantify each contribution
-
-  - id: deliverability_provider
-    question: "Why is hard_bounce_rate higher for some email providers than others?"
-    expected_path:
-      - decompose hard_bounce_rate by email_provider
-      - find one or two providers with elevated rates
-      - cross-check against soft_bounce and complaint rates for those providers
-      - conclude provider-specific deliverability issue (reputation, list hygiene, etc.)
-    why_it_works: "Provider-level deliverability variance is real and educational without requiring time depth."
-
-  - id: tri_state_silent_bug
-    question: "How many test campaigns are in our data?"
-    expected_path:
-      - naive query: WHERE is_test = false → returns only 21 rows
-      - agent recognizes this is implausible (only 21 non-test campaigns out of 1907)
-      - inspects the column more carefully — sees True=6, False=21, NULL=1880
-      - rewrites: WHERE is_test IS NOT TRUE → returns 1901 non-test campaigns
-      - explains the tri-state encoding
-    why_it_works: |
-      Demonstrates the agent catching a silent bug. Showcases careful
-      reasoning about data semantics. Less of a hero scenario, more of
-      a "the agent catches things humans wouldn't" moment.
-
-  - id: holiday_volume_anomaly
-    question: "Why did email send volume drop on May 9, 2021?"
-    expected_path:
-      - confirm a volume drop on May 9
-      - join to holidays table — find Victory Day
-      - cross-check: did this happen on other holidays in the window?
-      - conclude: scheduled holiday impact, not anomalous behavior
-    why_it_works: |
-      Tests the agent's ability to use external context (holidays table)
-      and to recognize 'this is expected' rather than chase phantom causes.
-
-# =============================================================================
-# DIFFERENCES FROM PRODUCTION LAYER (semantic_layer.yml)
-# =============================================================================
-differences_from_production:
-  notes: |
-    This dev/test layer differs from the production semantic_layer.yml in
-    the following ways. When the full 2-year data is loaded, switch to the
-    production layer to recover full functionality.
-
-  removed_from_production:
-    - external_event: "iOS 15 Mail Privacy Protection (2021-09-20) — outside window"
-    - external_event: "Russian invasion of Ukraine (2022-02-24) — outside window"
-    - external_event: "Black Friday / Cyber Monday 2021 (Nov 2021) — outside window"
-    - external_event: "Black Friday / Cyber Monday 2022 (Nov 2022) — outside window"
-    - hero_scenario: "composition_tenure (post-purchase tenure mix shift) — degenerate"
-    - hero_scenario: "composition_topic month-over-month — only 3 partial months"
-    - hero_scenario: "composition_channel month-over-month — only 3 partial months"
-
-  added_to_dev:
-    - dimension: "eventually_converted (purchase outcome lookup)"
-    - data_shape: "explicit characterization of the 6-week single-cohort structure"
-    - hero_scenario: "composition_eventually_converted (cross-sectional)"
-    - hero_scenario: "holiday_volume_anomaly (uses Victory Day)"
-    - gotcha: "time_series_questions_largely_invalid"
-    - gotcha: "pre_purchase_only_in_demo"
-    - gotcha: "campaigns_table_outlives_messages_window"
-
-  marked_degenerate_in_dev:
-    - dimension: "recipient_tenure_status (always pre_purchase)"
-    - dimension: "recipient_tenure_bucket (always never_purchased)"
-
-  unchanged:
-    - All table schemas
-    - All column-level metadata (fill_rate, null_meaning, encoding)
-    - All metrics
-    - The critical null_means_not_applicable gotcha
-    - The cross-table joins
-    - The exclude_test_campaigns global filter
