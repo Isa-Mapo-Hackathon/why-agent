@@ -359,7 +359,67 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 ---
 
-## 14. Pointers
+## 14. Implementation status
+
+| Component | Status |
+|---|---|
+| LLM client — 3 backends (`minimax`, `vllm`, `replay`) | ✅ done |
+| Pydantic state model (`InvestigationState`) | ✅ done |
+| LangGraph state machine (6-phase loop) | ✅ done |
+| `inspect_schema` tool | ✅ done |
+| `run_sql` tool | ✅ done |
+| `compare_periods` tool | ✅ done |
+| `decompose_metric` tool | ✅ done |
+| System + critique prompts | ✅ done |
+| REPL for local testing | ✅ done |
+| Streamlit UI | ⬜ pending |
+| GitHub Archive Parquet pipeline | ⬜ pending (Isa) |
+| Replay recording script | ⬜ pending |
+| vLLM Docker + MI300X scripts | ⬜ pending |
+
+---
+
+## 15. Getting started (dev setup)
+
+```bash
+# Prerequisites: Python 3.12+, uv installed
+git clone https://github.com/Isa-Mapo-Hackathon/why-agent
+cd why-agent
+uv sync
+
+# Copy and fill in .env
+cp .env.example .env
+# Set MINIMAX_API_KEY (get from MiniMax dashboard)
+# PARQUET_DIR defaults to data/parquet — point at data/dev for the toy dataset
+
+# Run the test suite (77 tests, no network required)
+uv run pytest
+
+# Interactive REPL against the real MiniMax API
+uv run python scripts/repl_graph.py
+# > Q: Why did PR activity drop on Oct 21 2018?
+
+# Lint + format (must be clean before any commit)
+uv run ruff check --fix && uv run ruff format
+
+# Run Streamlit app (UI not yet built — skeleton only)
+uv run streamlit run streamlit_app.py
+```
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `MODEL_BACKEND` | Yes | `minimax` / `vllm` / `replay` |
+| `MINIMAX_API_KEY` | When `MODEL_BACKEND=minimax` | MiniMax API key |
+| `VLLM_ENDPOINT` | When `MODEL_BACKEND=vllm` | e.g. `http://host:8000/v1` |
+| `REPLAY_SCENARIO_ID` | When `MODEL_BACKEND=replay` | Scenario JSON filename (without `.json`) |
+| `PARQUET_DIR` | No | Path to Parquet files (default: `data/parquet`) |
+| `SEMANTIC_LAYER_PATH` | No | Default: `data/semantic_layer.yml` |
+
+---
+
+## 16. Pointers
 
 - AMD Developer Hackathon: https://lablab.ai/ai-hackathons/amd-developer
 - AMD Developer Cloud docs: https://www.amd.com/en/developer/resources/cloud-access/amd-developer-cloud.html
