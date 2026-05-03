@@ -86,6 +86,8 @@ Judge / user                            Cost
 └──────────────────────────────┘
 ```
 
+![Architecture diagram](docs/why-agent-architecture.png)
+
 **Three logical pieces:**
 1. **The model** — vLLM serving Llama 70B on MI300X. Heavy, expensive.
 2. **The agent** — Python code (LangGraph). Light, runs anywhere.
