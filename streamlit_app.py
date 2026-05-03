@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -17,9 +18,9 @@ from agent.state import InvestigationState  # noqa: E402
 logger = logging.getLogger(__name__)
 
 DEMO_QUESTIONS = [
-    "Why did PR activity drop on Oct 21 2018?",
-    "Why did push events spike in the week of Oct 7 2018?",
-    "Why is weekend issue activity lower than weekday?",
+    "Why did message open rate drop in the most recent campaign?",
+    "Why did new customer acquisition spike in a particular month?",
+    "Why is weekend engagement consistently lower than weekday?",
 ]
 
 _RCA_KEYWORDS = {
@@ -44,11 +45,16 @@ def looks_like_rca_question(question: str) -> bool:
     return any(kw in question.lower() for kw in _RCA_KEYWORDS)
 
 
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks that some models emit as internal reasoning."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def format_report(report: dict) -> str:
     """Convert a final_report dict to display markdown."""
     parts: list[str] = []
 
-    text = report.get("text") or ""
+    text = _strip_think_tags(report.get("text") or "")
     if text:
         parts.append(text)
 
@@ -133,7 +139,7 @@ def main() -> None:
     pending = st.session_state.pop("pending_question", None)
 
     question = st.chat_input(
-        "Why did metric X move? (e.g. 'Why did PR activity drop on Oct 21 2018?')"
+        "Why did metric X move? (e.g. 'Why did message open rate drop last campaign?')"
     )
     # Sidebar demo button wins over stale chat-input text
     question = pending or question
@@ -142,7 +148,7 @@ def main() -> None:
         if not looks_like_rca_question(question):
             st.warning(
                 "why-agent is built for root-cause questions like "
-                "**'Why did PR activity drop on Oct 21 2018?'** — "
+                "**'Why did message open rate drop last campaign?'** — "
                 "try rephrasing with 'why', 'what caused', or describing a change.",
                 icon="💡",
             )
