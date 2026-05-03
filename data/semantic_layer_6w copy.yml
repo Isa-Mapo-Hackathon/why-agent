@@ -1,0 +1,981 @@
+# =============================================================================
+# why-agent semantic layer — 6-WEEK DEV/TEST VERSION
+# Dataset: REES46 E-commerce Multichannel Direct Messaging (demo slice)
+#
+# This is the development/test version of the semantic layer, built against
+# the 10M-row demo file (messages-demo.csv) which spans 6 weeks (Apr 30 – Jun
+# 14, 2021). The production version (semantic_layer.yml) targets the full
+# 721M-row, 2-year dataset.
+#
+# Mapo's agent code should work against either layer without modification —
+# only the YAML differs. This file makes claims about ONLY what's reachable
+# in the 6-week demo data.
+#
+# Source: https://www.kaggle.com/datasets/mkechinov/direct-messaging
+# =============================================================================
+
+dataset:
+  name: rees46_direct_messaging_demo_6w
+  description: >
+    Six weeks of multichannel messaging from a medium-sized Russian retailer.
+    Single recipient cohort: all ~3.35M recipients first appear in the data
+    between April 30 and June 14, 2021. Channels in use: email and mobile_push
+    (web_push has 266 messages, SMS has 0). This is a longitudinal cohort
+    study, NOT a panel — there is no acquisition of new recipients across
+    months. Time-series questions ("why did X change month over month") are
+    largely not viable; cross-sectional questions ("why is X different
+    between segments / campaigns / topics") are.
+  data_scope: dev_test
+  production_layer: semantic_layer.yml
+  time_grain: day
+  primary_date_column: messages.date
+  date_range: ["2021-04-30", "2021-06-14"]
+  span_days: 46
+
+# =============================================================================
+# DATA SHAPE — characteristics specific to this 6-week slice
+# =============================================================================
+data_shape:
+  description: >
+    The 6-week demo file is structurally different from the full 2-year
+    dataset. The agent should be aware of these characteristics:
+
+  characteristics:
+
+    - name: single_cohort_longitudinal
+      description: >
+        Every recipient in the data first received a message between
+        2021-04-30 and 2021-06-14. There is no fresh-lead acquisition
+        across months. Per-recipient tenure within the dataset (time
+        since first message) is bounded at 0–46 days.
+
+    - name: pre_purchase_only
+      description: >
+        100% of messages were sent BEFORE the recipient's first purchase
+        (or to recipients who never purchased). 0% of messages are
+        post-purchase. The recipient_tenure_* dimensions defined for the
+        production layer are degenerate here — every message falls into
+        the "pre_purchase" / "never_purchased" bucket.
+
+    - name: convertor_split
+      description: >
+        Of 3.35M unique recipients, 350,440 (10.45%) eventually made a
+        purchase (sometime in 2021–2023, well after the 6-week window).
+        The remaining 89.55% have no purchase record. This split is the
+        primary composition dimension viable in this slice.
+
+    - name: only_three_partial_months
+      description: >
+        Email volume by month: Apr (74K), May (4.25M), Jun (1.45M).
+        April and June are partial months. Month-over-month comparisons
+        are dominated by the May vs Jun comparison; April is too small
+        to be statistically meaningful.
+
+    - name: channel_distribution
+      description: >
+        email: 5,771,209 messages
+        mobile_push: 4,228,525 messages
+        web_push: 266 messages (effectively unused)
+        sms: 0 messages (no data in this slice)
+
+# =============================================================================
+# TABLES
+# =============================================================================
+tables:
+
+  messages:
+    description: >
+      Fact table. One row per individual message. The agent's primary working
+      surface — almost every metric is defined over this table.
+    source_file: messages-demo.csv
+    source_size: 2.17 GB
+    primary_key: message_id
+    grain: one row = one message to one recipient
+    row_count: 10_000_000
+    dropped_columns:
+      description: >
+        These columns existed in the raw CSV but were dropped during data prep.
+        The agent will not see them and should not reason about them.
+      list:
+        - {name: id,         reason: "Internal autoincrement; redundant with message_id"}
+        - {name: category,   reason: "100% null in source data"}
+        - {name: created_at, reason: "Internal CDP bookkeeping; not analysis-relevant"}
+        - {name: updated_at, reason: "Internal CDP bookkeeping; not analysis-relevant"}
+    columns:
+
+      # --- Identifiers ---
+      message_id:
+        type: string
+        fill_rate: full
+        description: "UUID, primary key"
+
+      campaign_id:
+        type: int
+        fill_rate: full
+        description: "FK to campaigns.id"
+
+      client_id:
+        type: int
+        fill_rate: full
+        description: |
+          Anonymized recipient ID, stable per user. FK to
+          client_first_purchase_date.client_id (LEFT JOIN — only ~10% of
+          recipients in this slice eventually purchased and appear there).
+
+      # --- Categorical dimensions ---
+      message_type:
+        type: enum
+        values: [bulk, trigger, transactional]
+        fill_rate: full
+
+      channel:
+        type: enum
+        values_present: [email, mobile_push, web_push]
+        values_absent: [sms]
+        fill_rate: full
+        notes: |
+          web_push has 266 messages — effectively unused, do not draw
+          conclusions from this slice. SMS has 0 messages in this slice
+          (the single SMS campaign in campaigns.csv produced no messages
+          here, or its messages fall outside the 6-week window).
+
+      email_provider:
+        type: string
+        fill_rate: 0.577
+        null_meaning: "NULL when channel != 'email'"
+        pairs_with: channel
+        description: "Email domain (mail.ru, yandex.ru, gmail.com, etc). Russian providers dominate."
+
+      platform:
+        type: string
+        fill_rate: 0.074
+        null_meaning: "NULL when message was not opened"
+        pairs_with: is_opened
+        description: "Device form-factor at open (smartphone/tablet/phablet). Detected from user-agent at open time."
+
+      stream:
+        type: string
+        fill_rate: full
+        description: "Device type (desktop/ios/android/etc)."
+
+      # --- Time ---
+      date:
+        type: date
+        fill_rate: full
+        description: "Date message was sent (YYYY-MM-DD). Use for grouping by day."
+
+      sent_at:
+        type: timestamp
+        fill_rate: full
+
+      # --- Engagement events (boolean + paired timestamps) ---
+      is_opened:
+        type: bool
+        fill_rate: full
+
+      opened_first_time_at:
+        type: timestamp
+        fill_rate: 0.161
+        null_meaning: "NULL when is_opened = false"
+        pairs_with: is_opened
+
+      opened_last_time_at:
+        type: timestamp
+        fill_rate: 0.161
+        null_meaning: "NULL when is_opened = false"
+        pairs_with: is_opened
+
+      is_clicked:
+        type: bool
+        fill_rate: full
+
+      clicked_first_time_at:
+        type: timestamp
+        fill_rate: 0.024
+        null_meaning: "NULL when is_clicked = false"
+        pairs_with: is_clicked
+
+      clicked_last_time_at:
+        type: timestamp
+        fill_rate: 0.024
+        null_meaning: "NULL when is_clicked = false"
+        pairs_with: is_clicked
+
+      # --- Negative events (boolean + paired timestamps) ---
+      is_unsubscribed:
+        type: bool
+        fill_rate: full
+
+      unsubscribed_at:
+        type: timestamp
+        fill_rate: 0.030
+        null_meaning: "NULL when is_unsubscribed = false"
+        pairs_with: is_unsubscribed
+
+      is_hard_bounced:
+        type: bool
+        fill_rate: full
+
+      hard_bounced_at:
+        type: timestamp
+        fill_rate: 0.003
+        null_meaning: "NULL when is_hard_bounced = false"
+        pairs_with: is_hard_bounced
+
+      is_soft_bounced:
+        type: bool
+        fill_rate: full
+
+      soft_bounced_at:
+        type: timestamp
+        fill_rate: 0.0004
+        null_meaning: "NULL when is_soft_bounced = false"
+        pairs_with: is_soft_bounced
+
+      is_complained:
+        type: bool
+        fill_rate: full
+
+      complained_at:
+        type: timestamp
+        fill_rate: 0.0005
+        null_meaning: "NULL when is_complained = false"
+        pairs_with: is_complained
+
+      is_blocked:
+        type: bool
+        fill_rate: full
+
+      blocked_at:
+        type: timestamp
+        fill_rate: 0.00002
+        null_meaning: "NULL when is_blocked = false"
+        pairs_with: is_blocked
+
+      # --- Conversion ---
+      is_purchased:
+        type: bool
+        fill_rate: full
+        description: "True when recipient made a purchase attributed to this message (within attribution window)"
+
+      purchased_at:
+        type: timestamp
+        fill_rate: 0.001
+        null_meaning: "NULL when is_purchased = false"
+        pairs_with: is_purchased
+
+  # ---------------------------------------------------------------------------
+  campaigns:
+    description: Dimension table. One row per campaign.
+    source_file: campaigns.csv
+    source_size: 254 KB
+    primary_key: id
+    row_count: 1907
+    composition:
+      by_campaign_type: {bulk: 1830, transactional: 50, trigger: 27}
+      by_channel: {mobile_push: 1396, email: 483, multichannel: 27, sms: 1}
+    notes: |
+      The campaigns table covers the full 2-year period — campaigns started
+      and ended throughout 2021–2023. But messages in the demo file only
+      reflect activity for these campaigns within April 30 – June 14, 2021.
+      Many campaigns in this table will have ZERO matching messages in the
+      demo data.
+    columns:
+
+      id:
+        type: int
+        fill_rate: full
+
+      campaign_type:
+        type: enum
+        values: [bulk, trigger, transactional]
+        fill_rate: full
+
+      channel:
+        type: enum
+        values: [email, mobile_push, web_push, sms, multichannel]
+        fill_rate: full
+        notes: |
+          messages.channel does NOT include 'multichannel' — multichannel
+          campaigns expand into individual messages on real channels.
+
+      topic:
+        type: string
+        fill_rate: 0.984
+        null_meaning: "NULL for ~30 campaigns where topic was not set"
+        cardinality: 28
+        top_values: [sale_out, happy_birthday, offer_after_purchase, leave_review, event]
+
+      # --- Bulk-only fields (null for trigger/transactional) ---
+      started_at:
+        type: timestamp
+        fill_rate: 0.957
+        null_meaning: "NULL for trigger/transactional campaigns (those run continuously)"
+        pairs_with: campaign_type
+
+      finished_at:
+        type: timestamp
+        fill_rate: 0.948
+        null_meaning: "NULL for trigger/transactional campaigns; also NULL for bulk campaigns that didn't complete"
+
+      total_count:
+        type: int
+        fill_rate: 0.957
+        null_meaning: "NULL for trigger/transactional campaigns (no fixed audience size)"
+        description: "Number of recipients in a bulk send. Spans the full lifetime of the campaign — may not match messages in the 6-week window."
+
+      # --- Tri-state booleans (CRITICAL: see gotcha) ---
+      is_test:
+        type: bool
+        fill_rate: 0.014
+        value_distribution: {true: 6, false: 21, null: 1880}
+        null_meaning: "NULL when never explicitly set. Both False and NULL effectively mean 'not a test campaign.'"
+        encoding: tri_state
+        description: |
+          Tri-state column: True (6), False (21), NULL (1880). Filter for
+          "exclude tests" must use `IS NOT TRUE`, NOT `= false`. The latter
+          would return only 21 rows. See gotcha: null_means_not_applicable.
+
+      ab_test:
+        type: bool
+        fill_rate: 0.006
+        value_distribution: {true: 12, false: 0, null: 1895}
+        null_meaning: "NULL when never explicitly set"
+        encoding: tri_state
+        description: "Looks sparse-true (no False values present), but encoding is the same tri-state pattern as is_test."
+
+      warmup_mode:
+        type: bool
+        fill_rate: 0.960
+        value_distribution: {true: 31, false: 1799, null: 77}
+        null_meaning: "NULL for the 77 trigger/transactional campaigns (warmup doesn't apply)"
+        pairs_with: campaign_type
+        encoding: tri_state
+
+      hour_limit:
+        type: int
+        fill_rate: 0.016
+        null_meaning: "NULL means no hourly send limit configured"
+        pairs_with: warmup_mode
+
+      position:
+        type: int
+        fill_rate: 0.013
+        null_meaning: "NULL when campaign is not a trigger"
+        pairs_with: campaign_type
+
+      # --- Subject features (null for the 27 multichannel campaigns) ---
+      subject_length:
+        type: int
+        fill_rate: 0.986
+        null_meaning: "NULL for the 27 multichannel campaigns (subject ambiguous when routing across channels)"
+
+      subject_with_personalization:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+      subject_with_deadline:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+      subject_with_emoji:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+      subject_with_bonuses:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+      subject_with_discount:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+      subject_with_saleout:
+        type: bool
+        fill_rate: 0.986
+        null_meaning: "NULL for multichannel campaigns"
+
+  # ---------------------------------------------------------------------------
+  holidays:
+    description: >
+      Russian and retail-relevant calendar events spanning 2021–2023.
+      Joins to messages on date.
+    source_file: holidays.csv
+    source_size: 1 KB
+    primary_key: date
+    row_count: 48
+    columns:
+      date:    {type: date,   fill_rate: full}
+      holiday: {type: string, fill_rate: full}
+    notes: |
+      Holidays span 2021–2023 but only those falling in April 30 – June 14,
+      2021 are reachable from messages. Russian retail holidays in this
+      window: probably Victory Day (May 9), Russia Day (June 12), some local
+      events. Most holidays in the table are outside the demo window and
+      will not match any messages.
+
+  # ---------------------------------------------------------------------------
+  client_first_purchase_date:
+    description: >
+      Per-client lookup of when each customer made their first purchase.
+      In the 6-week demo slice, ~10.45% of recipients (350,440 of 3,352,422
+      unique clients) eventually made a purchase — but ALL of those
+      purchases happened AFTER the 6-week messaging window. So this table
+      tells us "did this lead eventually convert" rather than "is this a
+      returning customer." See dimension: eventually_converted.
+    source_file: client_first_purchase_date.csv
+    source_size: 57.5 MB
+    primary_key: client_id
+    grain: one row per client who has ever purchased
+    row_count: 1_854_736
+    columns:
+      client_id:           {type: int,  fill_rate: full, description: "FK to messages.client_id"}
+      first_purchase_date: {type: date, fill_rate: full}
+    notes: |
+      Of 1.85M clients in this table, only 350K are recipients in the demo
+      messages file. The other 1.5M purchased without ever appearing in
+      this 6-week messaging window (probably reached via different channels,
+      or messaged outside the window). For demo purposes, this table is
+      effectively a "did this lead eventually convert?" lookup.
+
+# =============================================================================
+# JOINS
+# =============================================================================
+joins:
+
+  - name: messages_to_campaigns
+    left:  messages.campaign_id
+    right: campaigns.id
+    type:  many_to_one
+    join_kind: inner
+    notes: "Every message has a campaign_id. INNER JOIN is safe."
+
+  - name: messages_to_holidays
+    left:  messages.date
+    right: holidays.date
+    type:  many_to_one
+    join_kind: left
+    notes: "LEFT JOIN; treat NULL holiday as 'normal day'."
+
+  - name: messages_to_client_first_purchase
+    left:  messages.client_id
+    right: client_first_purchase_date.client_id
+    type:  many_to_one
+    join_kind: left
+    notes: |
+      LEFT JOIN — REQUIRED. Recipients absent from client_first_purchase_date
+      never purchased (89.55% of the demo population). They are the
+      "never_converted" segment, NOT missing data. Recipients with a row
+      (10.45%) are the "eventually_converted" segment — but their purchase
+      date is always AFTER the 6-week messaging window.
+
+# =============================================================================
+# GLOBAL FILTERS — applied to every metric unless explicitly opted out
+# =============================================================================
+global_filters:
+
+  - name: exclude_test_campaigns
+    description: >
+      Test campaigns target small audiences and skew aggregates. The dataset
+      author explicitly recommends excluding them.
+    sql: "campaigns.is_test IS NOT TRUE"
+    rationale: |
+      CRITICAL: must be `IS NOT TRUE`, not `= false`. The is_test column is
+      tri-state — out of 1907 campaigns, only 6 are True, 21 are False, and
+      1880 are NULL. We want all 1901 non-test campaigns (False AND NULL).
+      A naive `WHERE is_test = false` would return only 21 rows.
+      See gotcha: null_means_not_applicable.
+
+# =============================================================================
+# METRICS
+# =============================================================================
+metrics:
+
+  # --- Volume metrics ---
+  messages_sent:
+    description: Total messages sent.
+    type: count
+    sql: "COUNT(messages.message_id)"
+
+  unique_recipients:
+    description: Distinct clients reached.
+    type: count_distinct
+    sql: "COUNT(DISTINCT messages.client_id)"
+
+  campaigns_run:
+    description: Distinct campaigns active in the period.
+    type: count_distinct
+    sql: "COUNT(DISTINCT messages.campaign_id)"
+
+  # --- Engagement rate metrics ---
+  open_rate:
+    description: >
+      Share of messages opened. Email and push only (SMS has no open event;
+      no SMS messages exist in this slice anyway).
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+    applicable_channels: [email, mobile_push]
+    composition_warning: |
+      Open rate baselines differ by channel (email ~19%, mobile_push lower)
+      and by topic (transactional much higher than bulk sale_out) and by
+      eventually_converted status (eventually-converters ~21.3% vs
+      never-converters ~18.3%, in this slice). If aggregate open_rate moves
+      between any two slices, ALWAYS check whether channel/topic/conversion
+      mix shifted before concluding behavior changed.
+
+  click_through_rate:
+    description: Share of messages clicked.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+    composition_warning: "Same as open_rate — strongly varies by channel, topic, conversion status."
+
+  click_to_open_rate:
+    description: Of opened messages, share that were clicked.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
+    denominator: "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
+
+  conversion_rate:
+    description: >
+      Share of messages resulting in an in-window purchase. Note: very low
+      base rate in this slice (<0.5%) since most conversions happen after
+      the 6-week window.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_purchased THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+    composition_warning: "Strongly varies by topic, channel, conversion status."
+
+  # --- Negative-signal rates ---
+  unsubscribe_rate:
+    description: Share of messages resulting in unsubscribe.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_unsubscribed THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+
+  hard_bounce_rate:
+    description: Share of messages that hard-bounced.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_hard_bounced THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+
+  spam_complaint_rate:
+    description: Share of messages flagged as spam.
+    type: ratio
+    numerator:   "SUM(CASE WHEN messages.is_complained THEN 1 ELSE 0 END)"
+    denominator: "COUNT(messages.message_id)"
+
+  delivery_rate:
+    description: Share of messages successfully delivered.
+    type: ratio
+    numerator: |
+      SUM(CASE WHEN NOT messages.is_hard_bounced
+                 AND NOT messages.is_soft_bounced
+                 AND NOT messages.is_blocked
+               THEN 1 ELSE 0 END)
+    denominator: "COUNT(messages.message_id)"
+
+# =============================================================================
+# DIMENSIONS
+# =============================================================================
+dimensions:
+
+  channel:
+    table: messages
+    column: channel
+    description: Delivery channel.
+    cardinality: 3
+    typical_values: [email, mobile_push]
+    notes: "web_push effectively unused (266 messages). SMS not present in this slice."
+
+  message_type:
+    table: messages
+    column: message_type
+    description: Bulk vs trigger vs transactional.
+    cardinality: 3
+    notes: "Transactional has dramatically higher engagement. Including/excluding it in 'engagement' is a common analyst mistake."
+
+  topic:
+    table: campaigns
+    column: topic
+    description: Marketing intent of the campaign.
+    cardinality: 28
+    top_values: [sale_out, happy_birthday, offer_after_purchase, leave_review, event]
+    notes: "Strong determinant of every rate metric. Composition shifts here are the most common confound."
+
+  email_provider:
+    table: messages
+    column: email_provider
+    description: Email domain.
+    cardinality: ~50
+    notes: "mail.ru and yandex.ru dominate (Russian retailer)."
+
+  stream:
+    table: messages
+    column: stream
+    description: Device type (desktop/ios/android/etc).
+    cardinality: ~5
+
+  platform:
+    table: messages
+    column: platform
+    description: Device form-factor (smartphone/tablet/phablet).
+    cardinality: 3
+    notes: "NULL for unopened messages. Filter is_opened=true before decomposing."
+
+  topic_grouping:
+    derived: true
+    description: Higher-level topic category for cleaner decompositions.
+    sql_case: |
+      CASE
+        WHEN campaigns.topic IN ('sale_out', 'event') THEN 'promotional'
+        WHEN campaigns.topic IN ('happy_birthday', 'offer_after_purchase',
+                                  'leave_review', 'welcome_campaign') THEN 'lifecycle'
+        WHEN campaigns.topic IN ('order_created', 'order_shipped',
+                                  'order_ready_for_pickup', 'order_cancelled',
+                                  'order_reminder', 'double_opt_in') THEN 'transactional_topic'
+        WHEN campaigns.topic IN ('abandoned_cart', 'abandoned_view',
+                                  'abandoned_search', 'abandoned_category',
+                                  'price_drop', 'back_in_stock') THEN 'behavioral_trigger'
+        ELSE 'other'
+      END
+
+  is_holiday_window:
+    derived: true
+    description: Is the message sent within 3 days before a listed holiday?
+    sql: "messages.date BETWEEN holidays.date - INTERVAL 3 DAY AND holidays.date"
+    notes: "Within the 6-week window, expect coverage for May 9 (Victory Day), June 12 (Russia Day), and possibly other dates."
+
+  eventually_converted:
+    derived: true
+    primary_for_demo: true
+    description: >
+      Whether this recipient eventually made a first purchase (anytime in
+      2021-2023, almost always AFTER the 6-week messaging window). This is
+      the strongest composition dimension viable in the demo slice.
+    sql_case: |
+      CASE
+        WHEN client_first_purchase_date.first_purchase_date IS NULL
+          THEN 'never_converted'
+        ELSE 'eventually_converted'
+      END
+    cardinality: 2
+    population_split:
+      eventually_converted: {messages: 1941040, recipients: 350440, pct_of_messages: 33.6}
+      never_converted: {messages: 3830169, recipients: 3001982, pct_of_messages: 66.4}
+    engagement_baselines_email:
+      eventually_converted: {open_rate: 0.213, click_through_rate: 0.0486, conversion_rate: 0.0049}
+      never_converted: {open_rate: 0.183, click_through_rate: 0.0354, conversion_rate: 0.0007}
+    notes: |
+      The 3-percentage-point gap in open rate (21.3% vs 18.3%) and the 7x
+      gap in conversion rate (0.49% vs 0.07%) make this the cleanest
+      composition dimension in the data. ALWAYS check this dimension's
+      mix before concluding aggregate metrics changed for behavioral reasons.
+
+  subject_feature:
+    table: campaigns
+    description: Pseudo-dimension for subject-line feature flags.
+    notes: |
+      Each subject_with_* column is a separate boolean. WARNING: these
+      features are heavily correlated with topic and channel. The Kaggle
+      author's "emoji boost" finding is a known confounded case. NULL for
+      all 27 multichannel campaigns.
+
+  # --- DEGENERATE in this 6-week slice — kept for layer compatibility ---
+  recipient_tenure_status:
+    derived: true
+    degenerate_in_demo: true
+    description: |
+      In the production layer, splits recipients by pre-purchase vs
+      post-purchase status. In the 6-week demo slice, ALL messages are
+      pre-purchase — this dimension always evaluates to 'pre_purchase'.
+      Use eventually_converted instead for composition analysis on demo data.
+    sql_case: "'pre_purchase'  -- always, in this slice"
+
+  recipient_tenure_bucket:
+    derived: true
+    degenerate_in_demo: true
+    description: |
+      In the production layer, buckets recipients by months since first
+      purchase. In the 6-week demo slice, ALL messages are pre-purchase
+      — this dimension always evaluates to 'never_purchased'. Use
+      eventually_converted instead.
+    sql_case: "'never_purchased'  -- always, in this slice"
+
+# =============================================================================
+# DIMENSION HIERARCHIES
+# =============================================================================
+hierarchies:
+  time:
+    levels: [day, week]
+    primary_column: messages.date
+    notes: "Month/quarter levels excluded — only 3 partial months in this slice."
+  campaign:
+    levels: [campaign_id, topic, topic_grouping, message_type]
+
+# =============================================================================
+# GOTCHAS — context that changes how the agent reasons
+# =============================================================================
+gotchas:
+
+  - name: null_means_not_applicable
+    severity: critical
+    description: >
+      Several columns in `campaigns` are tri-state (True / False / NULL),
+      where NULL means "not applicable to this row" rather than "false."
+      Affected: is_test, ab_test, warmup_mode (booleans); hour_limit,
+      position (integers).
+
+      The False count is often small or zero, while NULL counts are large.
+      Examples:
+        is_test:     True=6,    False=21,   NULL=1880
+        ab_test:     True=12,   False=0,    NULL=1895
+        warmup_mode: True=31,   False=1799, NULL=77
+
+      NAIVE QUERIES PRODUCE WRONG ANSWERS. `WHERE is_test = false` returns
+      only the 21 explicitly-False rows, dropping the 1880 NULL rows that
+      also represent non-test campaigns. The correct filter is
+      `WHERE is_test IS NOT TRUE` (or `IS DISTINCT FROM true`), which
+      correctly includes both False AND NULL.
+
+      Errors here are silent — queries run, return data that looks plausible,
+      and are wrong. This is the most failure-prone gotcha in the dataset.
+
+  - name: time_series_questions_largely_invalid
+    severity: critical
+    description: >
+      The demo slice spans only 6 weeks (April 30 – June 14, 2021). Email
+      messaging covers 3 partial months (April 74K, May 4.25M, June 1.45M).
+      Month-over-month and longer time-series questions ARE NOT ANSWERABLE
+      from this data. The agent MUST detect when a user's question implies
+      multi-month context ("compared to last quarter," "year-over-year,"
+      "trend over the past few months") and clarify or redirect rather
+      than fabricate an answer.
+
+      Cross-sectional questions (between segments, campaigns, topics, days
+      within the window) ARE viable and should be the agent's primary mode.
+
+  - name: pre_purchase_only_in_demo
+    severity: high
+    description: >
+      ALL messages in the demo slice were sent before the recipient's first
+      purchase (or to recipients who never purchased). Tenure-based questions
+      that distinguish "new vs returning customers" are not answerable here.
+      The recipient_tenure_status and recipient_tenure_bucket dimensions
+      are degenerate (always 'pre_purchase' / 'never_purchased'). Use
+      eventually_converted instead — that's the working composition dimension
+      for this slice.
+
+  - name: rate_metrics_need_composition_check
+    severity: high
+    description: >
+      open_rate, click_through_rate, conversion_rate, unsubscribe_rate are
+      all averages over a population. If the agent finds an aggregate rate
+      differs across slices (e.g., between two campaigns, two topics, two
+      days), it MUST check whether the population mix changed (across
+      channel, topic, message_type, eventually_converted) before concluding
+      that BEHAVIOR differs. Composition-shift confounds are the dominant
+      analytical failure mode in this dataset.
+
+  - name: sparse_event_columns_are_meaningful
+    severity: medium
+    description: >
+      Many *_at and device columns are conditionally null based on whether
+      a corresponding event happened. Low fill rates are by design, not
+      data quality issues. Use the boolean is_* partner for filtering;
+      use the timestamp only for time-of-event analysis.
+
+  - name: subject_features_null_for_multichannel
+    severity: medium
+    description: >
+      All subject_with_* columns and subject_length are NULL for the 27
+      multichannel campaigns. When decomposing by any subject feature,
+      multichannel campaigns appear as a NULL bucket — this is correct
+      behavior, but worth flagging in the agent's narration.
+
+  - name: subject_features_are_confounded
+    severity: medium
+    description: >
+      subject_with_emoji, subject_with_personalization, etc. correlate
+      strongly with topic and channel. The Kaggle notebook author noted
+      campaigns "with emoji" appear to convert better — this is almost
+      certainly composition-driven (which topics use emoji), not causal.
+      This is a documented, reproducible confound and a strong demo
+      candidate.
+
+  - name: campaigns_table_outlives_messages_window
+    severity: medium
+    description: >
+      campaigns.csv contains 1907 campaigns spanning 2021-2023. The
+      messages-demo.csv only covers 6 weeks of activity. Many campaigns
+      in the table have ZERO messages in the demo data — they ran
+      entirely outside the window. campaigns.total_count reflects the
+      campaign's full lifetime audience, NOT the count of messages in the
+      demo file. Always count messages from the messages table directly,
+      never trust campaigns.total_count for in-window analysis.
+
+  - name: campaign_channel_vs_message_channel
+    severity: medium
+    description: >
+      campaigns.channel can be 'multichannel'; messages.channel cannot.
+      Multichannel campaigns expand into individual messages on real
+      channels. When decomposing engagement by channel, use messages.channel.
+
+  - name: holiday_table_extends_beyond_window
+    severity: low
+    description: >
+      The holidays table covers 2021-2023, but only those falling within
+      the 6-week messaging window will match any messages. Don't expect
+      every listed holiday to have impact in this slice.
+
+  - name: web_push_and_sms_are_absent_in_demo
+    severity: low
+    description: >
+      Despite the schema supporting them, web_push has only 266 messages
+      and SMS has 0 messages in the demo slice. Don't compute open_rate
+      for SMS. Don't draw conclusions from web_push slices.
+
+# =============================================================================
+# EXTERNAL CONTEXT — events the agent uses to PROPOSE hypotheses
+# Only events within or near the 6-week window are listed.
+# =============================================================================
+external_events:
+
+  - date: 2021-05-09
+    name: "Victory Day (Russia)"
+    affects_metrics: [messages_sent, conversion_rate]
+    description: >
+      Major Russian public holiday. May see send-volume changes around
+      this date (some retailers pause sends; others promote).
+
+  - date: 2021-06-12
+    name: "Russia Day"
+    affects_metrics: [messages_sent]
+    description: "Russian national holiday. May affect bulk send timing."
+
+  # Note: iOS 15 (Sep 2021), Russian invasion (Feb 2022), Black Friday 2021/2022
+  # are all OUTSIDE this 6-week demo window and have been excluded. They live
+  # in the production layer (semantic_layer.yml) for the full 2-year data.
+
+# =============================================================================
+# DEMO SCENARIOS — candidate "why" questions for testing the agent
+# All scenarios are CROSS-SECTIONAL (within the 6-week window),
+# not month-over-month time series.
+# =============================================================================
+demo_scenarios:
+
+  - id: composition_eventually_converted
+    hero_candidate: true
+    question: "Why is email open rate 21.3% for recipients who eventually converted, but only 18.3% for those who never did?"
+    expected_path:
+      - confirm the gap is real (it is — 3 percentage points)
+      - decompose the gap by topic — find each topic's rate is fairly stable across the two groups
+      - decompose by channel — same finding
+      - check the *mix* of topics and channels each segment receives — find that eventually-converters disproportionately receive certain campaign types (lifecycle, transactional) while never-converters get more bulk sale_out
+      - cross-check by computing within-topic open rates for both groups
+      - "conclude: the open-rate gap is partly composition (different campaign mix), and the per-segment behavioral gap is smaller than it first appears. OR, conclude: the gap is real even within topics, suggesting the eventually-converted group genuinely engages more."
+    why_it_works: |
+      Tractable on the actual demo data. Uses the cleanest composition
+      dimension we have (eventually_converted), reaches a non-obvious
+      conclusion that requires multi-step reasoning, and lets the agent
+      either confirm or refute the naive interpretation. The punchline
+      lands with industry judges who all run lead-scoring or
+      segmentation initiatives.
+
+  - id: subject_feature_confound
+    hero_candidate: true
+    question: "Do emoji subjects boost conversion?"
+    expected_path:
+      - "naive: yes, emoji campaigns convert higher (the Kaggle author's finding)"
+      - decompose by topic — find emoji is concentrated in certain topics (especially sale_out and event)
+      - control for topic — find the effect dramatically reduced or reversed
+      - conclude the apparent boost is confounded by topic mix
+    why_it_works: |
+      Documented in the Kaggle author's own notebook — guaranteed reproducible.
+      The agent gets to catch a trap that even the dataset's author fell into.
+
+  - id: composition_topic_within_channel
+    question: "Why do bulk emails have lower open rates than transactional emails?"
+    expected_path:
+      - confirm the gap (transactional much higher)
+      - decompose by topic within each message_type
+      - find the gap is a mix of behavior (transactional inherently more engaging) and composition (transactional concentrated in specific high-engagement topics)
+      - quantify each contribution
+
+  - id: deliverability_provider
+    question: "Why is hard_bounce_rate higher for some email providers than others?"
+    expected_path:
+      - decompose hard_bounce_rate by email_provider
+      - find one or two providers with elevated rates
+      - cross-check against soft_bounce and complaint rates for those providers
+      - conclude provider-specific deliverability issue (reputation, list hygiene, etc.)
+    why_it_works: "Provider-level deliverability variance is real and educational without requiring time depth."
+
+  - id: tri_state_silent_bug
+    question: "How many test campaigns are in our data?"
+    expected_path:
+      - naive query: WHERE is_test = false → returns only 21 rows
+      - agent recognizes this is implausible (only 21 non-test campaigns out of 1907)
+      - inspects the column more carefully — sees True=6, False=21, NULL=1880
+      - rewrites: WHERE is_test IS NOT TRUE → returns 1901 non-test campaigns
+      - explains the tri-state encoding
+    why_it_works: |
+      Demonstrates the agent catching a silent bug. Showcases careful
+      reasoning about data semantics. Less of a hero scenario, more of
+      a "the agent catches things humans wouldn't" moment.
+
+  - id: holiday_volume_anomaly
+    question: "Why did email send volume drop on May 9, 2021?"
+    expected_path:
+      - confirm a volume drop on May 9
+      - join to holidays table — find Victory Day
+      - cross-check: did this happen on other holidays in the window?
+      - conclude: scheduled holiday impact, not anomalous behavior
+    why_it_works: |
+      Tests the agent's ability to use external context (holidays table)
+      and to recognize 'this is expected' rather than chase phantom causes.
+
+# =============================================================================
+# DIFFERENCES FROM PRODUCTION LAYER (semantic_layer.yml)
+# =============================================================================
+differences_from_production:
+  notes: |
+    This dev/test layer differs from the production semantic_layer.yml in
+    the following ways. When the full 2-year data is loaded, switch to the
+    production layer to recover full functionality.
+
+  removed_from_production:
+    - external_event: "iOS 15 Mail Privacy Protection (2021-09-20) — outside window"
+    - external_event: "Russian invasion of Ukraine (2022-02-24) — outside window"
+    - external_event: "Black Friday / Cyber Monday 2021 (Nov 2021) — outside window"
+    - external_event: "Black Friday / Cyber Monday 2022 (Nov 2022) — outside window"
+    - hero_scenario: "composition_tenure (post-purchase tenure mix shift) — degenerate"
+    - hero_scenario: "composition_topic month-over-month — only 3 partial months"
+    - hero_scenario: "composition_channel month-over-month — only 3 partial months"
+
+  added_to_dev:
+    - dimension: "eventually_converted (purchase outcome lookup)"
+    - data_shape: "explicit characterization of the 6-week single-cohort structure"
+    - hero_scenario: "composition_eventually_converted (cross-sectional)"
+    - hero_scenario: "holiday_volume_anomaly (uses Victory Day)"
+    - gotcha: "time_series_questions_largely_invalid"
+    - gotcha: "pre_purchase_only_in_demo"
+    - gotcha: "campaigns_table_outlives_messages_window"
+
+  marked_degenerate_in_dev:
+    - dimension: "recipient_tenure_status (always pre_purchase)"
+    - dimension: "recipient_tenure_bucket (always never_purchased)"
+
+  unchanged:
+    - All table schemas
+    - All column-level metadata (fill_rate, null_meaning, encoding)
+    - All metrics
+    - The critical null_means_not_applicable gotcha
+    - The cross-table joins
+    - The exclude_test_campaigns global filter
