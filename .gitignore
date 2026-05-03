@@ -33,3 +33,6 @@ htmlcov/
 
 # Pyright
 pyrightconfig.json
+
+# Data
+data/parquet/
