@@ -356,7 +356,14 @@ tables:
     description: Dimension table. One row per campaign.
     source_file: campaigns.csv
     source_size: 254 KB
-    primary_key: id
+    primary_key: [id, campaign_type]
+    primary_key_note: |
+      The primary key is COMPOSITE: (id, campaign_type). The id column alone
+      is NOT unique — the same numeric id can appear twice with different
+      campaign_type values (e.g. id=366 exists once as 'bulk' and once as
+      'transactional'). Always filter or GROUP BY both id AND campaign_type
+      when querying campaigns directly. When joining messages to campaigns,
+      use: JOIN campaigns c ON c.id = m.campaign_id AND c.campaign_type = m.message_type
     row_count: 1907
     composition:
       by_campaign_type: {bulk: 1830, transactional: 50, trigger: 27}
@@ -372,7 +379,12 @@ tables:
       id:
         type: int
         fill_rate: full
-        description: "Primary key of the campaigns table. When joining or filtering campaigns directly, use 'campaigns.id' — NOT 'campaign_id' (that column lives in messages, not here)."
+        description: |
+          Part of the composite primary key (id, campaign_type). id alone is
+          NOT unique. When joining to messages, use:
+          JOIN campaigns c ON c.id = m.campaign_id AND c.campaign_type = m.message_type
+          Never join on id alone or you will get duplicate rows for campaigns
+          that share an id across campaign_type values.
 
       campaign_type:
         type: enum

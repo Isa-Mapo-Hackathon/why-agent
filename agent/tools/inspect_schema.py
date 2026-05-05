@@ -177,7 +177,11 @@ def inspect_schema(
                 name=args.table,
                 description=t.get("description", ""),
                 grain=t.get("grain", ""),
-                primary_key=t.get("primary_key"),
+                primary_key=(
+                    ", ".join(t["primary_key"])
+                    if isinstance(t.get("primary_key"), list)
+                    else t.get("primary_key")
+                ),
                 columns=columns,
                 joins=t.get("joins") or [],
             )
