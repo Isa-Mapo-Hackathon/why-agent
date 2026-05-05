@@ -175,14 +175,15 @@ The current demo dataset is a marketing/CRM extract:
 
 ### The semantic layer
 
-A single `data/semantic_layer.yml` file. ~80–150 lines. Defines:
+A single `data/semantic_layer.yml` file. Defines:
 
-- **Tables**: events, repos, languages
-- **Metrics**: `events_per_day`, `unique_actors_per_day`, `pr_merge_rate`, etc.
-- **Dimensions**: `event_type`, `language`, `repo_age_bucket`, `hour_of_day`
-- **Relationships**: how tables join
-- **Filters**: globally applied rules (e.g., exclude bots)
-- **Value labels**: what enum values mean
+- **Tables**: column names, types, business meaning, and primary keys (supports composite PKs via a list)
+- **Metrics**: named measures the agent can compute (`open_rate`, `messages_sent`, etc.)
+- **Dimensions**: slicing axes for decomposition (`channel`, `topic`, `eventually_converted`, etc.)
+- **Relationships**: join keys between tables
+- **Filters**: globally applied rules (e.g., exclude test campaigns)
+- **Value labels**: what enum values mean (e.g., `bulk` vs `trigger` vs `transactional`)
+- **Gotchas**: dataset-specific analysis pitfalls surfaced to the agent at plan time
 
 This artifact is **the contract between Isa and Mapo**. Isa produces
 it; Mapo consumes it. Once it stabilizes, both of us build forward
@@ -367,7 +368,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 | `decompose_metric` tool | ✅ done |
 | System + critique prompts | ✅ done |
 | REPL for local testing | ✅ done |
-| Streamlit UI | ⬜ pending |
+| Streamlit UI | ✅ done |
 | Demo dataset in `data/parquet/` | ✅ done |
 | Replay recording script | ⬜ pending |
 | vLLM Docker + MI300X scripts | ⬜ pending |
@@ -387,7 +388,7 @@ cp .env.example .env
 # Set MINIMAX_API_KEY (get from MiniMax dashboard)
 # PARQUET_DIR defaults to data/parquet — point at data/dev for the toy dataset
 
-# Run the test suite (77 tests, no network required)
+# Run the test suite (106 tests, no network required)
 uv run pytest
 
 # Interactive REPL against the real MiniMax API
@@ -397,7 +398,7 @@ uv run python scripts/repl_graph.py
 # Lint + format (must be clean before any commit)
 uv run ruff check --fix && uv run ruff format
 
-# Run Streamlit app (UI not yet built — skeleton only)
+# Run Streamlit app
 uv run streamlit run streamlit_app.py
 ```
 
