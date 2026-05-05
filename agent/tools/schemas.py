@@ -64,6 +64,18 @@ class RunSqlOutput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class JoinInfo(BaseModel):
+    left_col: str = Field(description="Left column of the join (e.g. 'orders.product_id').")
+    right_col: str = Field(description="Right column of the join (e.g. 'products.id').")
+    join_kind: str = Field(description="'INNER' or 'LEFT'.")
+    sql: str = Field(
+        description=(
+            "Ready-to-use JOIN clause for run_sql queries. "
+            "Example: 'INNER JOIN products ON orders.product_id = products.id'."
+        )
+    )
+
+
 class InspectSchemaInput(BaseModel):
     table: str | None = Field(
         default=None,
@@ -84,6 +96,10 @@ class TableSummary(BaseModel):
     name: str
     description: str
     grain: str
+    primary_key: str | None = Field(
+        default=None,
+        description="Primary key column name. Use this column name — not the FK name from another table — when filtering this table directly.",
+    )
     columns: list[ColumnInfo]
     joins: list[str] = Field(default_factory=list)
 
@@ -98,6 +114,28 @@ class InspectSchemaOutput(BaseModel):
     dimensions: list[str] | None = Field(
         default=None, description="Named dimension keys usable in decompose_metric."
     )
+    dimension_notes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Key guidance per dimension. Tells you which dimensions are most analytically important "
+            "and which have known pitfalls. Read before choosing which dimensions to investigate."
+        ),
+    )
+    joins: list[JoinInfo] | None = Field(
+        default=None,
+        description=(
+            "Table join relationships (returned when no table arg given). "
+            "Use the sql field in run_sql queries to join across tables."
+        ),
+    )
+    gotchas: list[str] | None = Field(
+        default=None,
+        description=(
+            "Critical and high-severity analysis pitfalls for this dataset. "
+            "Read all of these before forming hypotheses — they document known confounds "
+            "and failure modes that produce plausible-looking but wrong conclusions."
+        ),
+    )
     table: TableSummary | None = Field(
         default=None, description="Full table description (returned when table arg is given)."
     )
@@ -111,6 +149,7 @@ class InspectSchemaOutput(BaseModel):
                 self.tables is not None
                 or self.metrics is not None
                 or self.dimensions is not None
+                or self.joins is not None
                 or self.table is not None
             )
             if not has_payload:

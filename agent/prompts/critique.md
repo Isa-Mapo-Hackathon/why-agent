@@ -24,7 +24,7 @@ the user's question with confidence. Consider:
 
 ## Response format
 
-Start your response with exactly one of these prefixes on its own line:
+Start your response with exactly this line (no bold, no code fence, no extra characters):
 
 ```
 VERDICT: strong
@@ -38,9 +38,5 @@ VERDICT: weak
 
 Then write 1–2 sentences justifying your decision.
 
-**VERDICT: strong**
-> A brief (1–2 sentence) justification of why the leading hypothesis is well-supported.
-
-**VERDICT: weak**
-> A brief (1–2 sentence) explanation of what is missing and what you would investigate next.
-> The graph will loop back to the `decompose` phase.
+- **VERDICT: strong** — the leading hypothesis is well-supported by quantitative evidence and at least one alternative has been ruled out.
+- **VERDICT: weak** — key evidence is missing, a confound is unexplored, or the cross-check contradicted the hypothesis. State what is missing. The graph will loop back to the `decompose` phase.

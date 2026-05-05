@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -17,9 +18,9 @@ from agent.state import InvestigationState  # noqa: E402
 logger = logging.getLogger(__name__)
 
 DEMO_QUESTIONS = [
-    "Why did PR activity drop on Oct 21 2018?",
-    "Why did push events spike in the week of Oct 7 2018?",
-    "Why is weekend issue activity lower than weekday?",
+    "Why did message open rate drop in the most recent campaign?",
+    "Why does campaign 361 convert 60x better than campaign 296?",
+    "Why is weekend engagement consistently lower than weekday?",
 ]
 
 _RCA_KEYWORDS = {
@@ -44,11 +45,16 @@ def looks_like_rca_question(question: str) -> bool:
     return any(kw in question.lower() for kw in _RCA_KEYWORDS)
 
 
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks that some models emit as internal reasoning."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def format_report(report: dict) -> str:
     """Convert a final_report dict to display markdown."""
     parts: list[str] = []
 
-    text = report.get("text") or ""
+    text = _strip_think_tags(report.get("text") or "")
     if text:
         parts.append(text)
 
@@ -84,20 +90,47 @@ def get_graph():
 
 
 def run_investigation(question: str) -> tuple[dict | None, list[dict], str]:
-    """Run the full investigation graph. Returns (report, evidence, error)."""
+    """Run the full investigation graph with live progress. Returns (report, evidence, error)."""
     try:
         graph = get_graph()
-        state = InvestigationState(user_question=question)
-        result = graph.invoke(state)
+        init_state = InvestigationState(user_question=question)
 
-        report = result.get("final_report")
-        raw_evidence = result.get("evidence") or []
-        # EvidenceEntry models → plain dicts for display
-        evidence = [e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in raw_evidence]
+        final_chunk: dict | None = None
+        seen_evidence = 0
+
+        with st.status("Investigating…", expanded=True) as status:
+            for chunk in graph.stream(init_state, stream_mode="values"):
+                final_chunk = chunk
+                evidence = chunk.get("evidence") or []
+                phase = str(chunk.get("phase", "")).split(".")[-1]  # "Phase.PLAN" → "PLAN"
+
+                for e in evidence[seen_evidence:]:
+                    tool = (
+                        e.get("tool_name", "?")
+                        if isinstance(e, dict)
+                        else getattr(e, "tool_name", "?")
+                    )
+                    out = e.get("output", {}) if isinstance(e, dict) else getattr(e, "output", {})
+                    err = out.get("error") if isinstance(out, dict) else None
+                    icon = "⚠️" if err else "✓"
+                    status.write(f"{icon} `{tool}` [{phase}]")
+
+                seen_evidence = len(evidence)
+
+            status.update(label="Investigation complete", state="complete", expanded=False)
+
+        if final_chunk is None:
+            return None, [], "Graph returned no state."
+
+        report = final_chunk.get("final_report")
+        raw_evidence = final_chunk.get("evidence") or []
+        evidence_dicts = [
+            e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in raw_evidence
+        ]
 
         if report:
-            return report, evidence, ""
-        return None, evidence, result.get("error") or "No report returned."
+            return report, evidence_dicts, ""
+        return None, evidence_dicts, final_chunk.get("error") or "No report returned."
     except Exception as exc:
         logger.exception("Investigation failed")
         return None, [], str(exc)
@@ -133,7 +166,7 @@ def main() -> None:
     pending = st.session_state.pop("pending_question", None)
 
     question = st.chat_input(
-        "Why did metric X move? (e.g. 'Why did PR activity drop on Oct 21 2018?')"
+        "Why did metric X move? (e.g. 'Why did message open rate drop last campaign?')"
     )
     # Sidebar demo button wins over stale chat-input text
     question = pending or question
@@ -142,13 +175,12 @@ def main() -> None:
         if not looks_like_rca_question(question):
             st.warning(
                 "why-agent is built for root-cause questions like "
-                "**'Why did PR activity drop on Oct 21 2018?'** — "
+                "**'Why did message open rate drop last campaign?'** — "
                 "try rephrasing with 'why', 'what caused', or describing a change.",
                 icon="💡",
             )
 
-        with st.spinner(f"Investigating: *{question}*"):
-            report, evidence, err = run_investigation(question)
+        report, evidence, err = run_investigation(question)
 
         st.session_state["history"].append(
             {"question": question, "report": report, "evidence": evidence, "error": err}

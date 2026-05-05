@@ -61,6 +61,73 @@ def _is_readonly(query: str) -> bool:
     return first_token in {"SELECT", "WITH"}
 
 
+def _hint_from_error(error: str) -> str:
+    """Return a targeted hint by pattern-matching common DuckDB error messages."""
+    # "Referenced column X not found in FROM clause! Candidate bindings: Y"
+    col_match = re.search(
+        r'referenced column[^"]*"([^"]+)".*?candidate bindings:\s*"([^"]+)"',
+        error,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if col_match:
+        missing, candidates = col_match.group(1), col_match.group(2)
+        return (
+            f'Column "{missing}" does not exist in the tables you queried '
+            f'(available: "{candidates}"). '
+            "If this column belongs to another table, add the appropriate JOIN — "
+            "call inspect_schema() with no args to list available tables and their join keys."
+        )
+
+    # "Referenced table X not found"
+    tbl_match = re.search(r'referenced table[^"]*"([^"]+)"', error, re.IGNORECASE)
+    if tbl_match:
+        return (
+            f'Table "{tbl_match.group(1)}" not found. '
+            "Call inspect_schema() with no args to list available tables, "
+            "then use the exact table name in your FROM clause."
+        )
+
+    # "Table X does not have a column named Y"
+    col2_match = re.search(r'table[^"]*"([^"]+)"[^"]*column[^"]*"([^"]+)"', error, re.IGNORECASE)
+    if col2_match:
+        return (
+            f'Column "{col2_match.group(2)}" not found in table "{col2_match.group(1)}". '
+            "Call inspect_schema(table=<name>) to see the correct column names, "
+            "paying attention to the primary_key field."
+        )
+
+    # "Values list "c" does not have a column named "name"" — DuckDB's label for
+    # any aliased subquery/CTE when column resolution fails.
+    values_match = re.search(
+        r'values list[^"]*"([^"]+)"[^"]*column[^"]*"([^"]+)"', error, re.IGNORECASE
+    )
+    if values_match:
+        alias, col = values_match.group(1), values_match.group(2)
+        return (
+            f'Column "{col}" does not exist in the result aliased as "{alias}". '
+            "Call inspect_schema(table=<name>) to confirm exact column names before writing SQL. "
+            "Rewrite the query using only columns confirmed by inspect_schema."
+        )
+
+    # "column X must appear in the GROUP BY clause"
+    if "must appear in the group by clause" in error.lower():
+        col_gb = re.search(r'column[^"]*"([^"]+)"', error, re.IGNORECASE)
+        col_name = col_gb.group(1) if col_gb else "unknown"
+        return (
+            f'Column "{col_name}" appears in SELECT or ORDER BY but is missing from GROUP BY. '
+            "Either add it to GROUP BY, or wrap it in an aggregate (e.g. ANY_VALUE(col))."
+        )
+
+    # "aggregate function calls cannot be nested"
+    if "aggregate function calls cannot be nested" in error.lower():
+        return (
+            "Nested aggregates (e.g. AVG(SUM(...))) are not allowed. "
+            "Use a subquery or CTE: compute the inner aggregate first, then aggregate the result."
+        )
+
+    return "Check table and column names with inspect_schema, then rewrite the query."
+
+
 def _execute(args: RunSqlInput, conn: duckdb.DuckDBPyConnection) -> RunSqlOutput:
     try:
         start = time.monotonic()
@@ -83,13 +150,14 @@ def _execute(args: RunSqlInput, conn: duckdb.DuckDBPyConnection) -> RunSqlOutput
         )
     except Exception as exc:
         logger.warning("run_sql failed: %s", exc)
+        hint = _hint_from_error(str(exc))
         return RunSqlOutput(
             rows=[],
             truncated=False,
             row_count=0,
             execution_ms=0.0,
             error=str(exc),
-            hint="Check table and column names with inspect_schema, then retry.",
+            hint=hint,
         )
 
 
@@ -103,6 +171,12 @@ def run_sql(args: RunSqlInput, conn: duckdb.DuckDBPyConnection | None = None) ->
     Prefer injecting a shared `conn` from the graph; if omitted, a one-shot
     connection is built from PARQUET_DIR and closed after the query.
     """
+    # Strip a single trailing semicolon — LLMs routinely append one; it is
+    # harmless but trips the read-only guard below.
+    clean_query = args.query.rstrip().rstrip(";").rstrip()
+    if clean_query != args.query:
+        args = RunSqlInput(query=clean_query, max_rows=args.max_rows)
+
     if not _is_readonly(args.query):
         return RunSqlOutput(
             rows=[],

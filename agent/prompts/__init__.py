@@ -13,8 +13,10 @@ _RAW_CRITIQUE = (_PROMPTS_DIR / "critique.md").read_text()
 
 
 def _render_system(phase: str, hypotheses: str, evidence_summary: str) -> str:
-    return _RAW_SYSTEM.replace("{phase}", phase).replace("{hypotheses}", hypotheses).replace(
-        "{evidence_summary}", evidence_summary
+    return (
+        _RAW_SYSTEM.replace("{phase}", phase)
+        .replace("{hypotheses}", hypotheses)
+        .replace("{evidence_summary}", evidence_summary)
     )
 
 

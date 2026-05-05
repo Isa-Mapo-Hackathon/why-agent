@@ -36,6 +36,7 @@ from agent.tools.schemas import (
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
+MAX_TOOL_CALLS = 50  # hard cap across all phases — prevents infinite tool-call loops
 
 
 def _iso_now() -> str:
@@ -52,13 +53,15 @@ def _format_hypotheses(hypotheses: list[Hypothesis]) -> str:
     return "\n".join(lines)
 
 
-def _format_evidence(evidence: list[EvidenceEntry]) -> str:
+def _format_evidence(evidence: list[EvidenceEntry], full_output: bool = False) -> str:
     if not evidence:
         return "No evidence collected yet."
     lines = []
     for e in evidence:
         err_tag = " [ERROR]" if "error" in e.output else ""
-        out_snippet = str(e.output)[:120]
+        raw = str(e.output)
+        out_snippet = raw if full_output else raw[:400]
+        out_snippet = out_snippet.replace("{", "{{").replace("}", "}}")
         lines.append(f"  [{e.phase.value}] {e.tool_name}{err_tag}: {out_snippet}")
     return "\n".join(lines)
 
@@ -68,26 +71,34 @@ def _format_evidence(evidence: list[EvidenceEntry]) -> str:
 # schema generation (which inspects function signatures) never sees conn
 # ---------------------------------------------------------------------------
 
+
 def _make_tool_wrapper(name: str):
-    def wrapper(args: InspectSchemaInput | RunSqlInput | ComparePeriodsInput | DecomposeMetricInput):
+    def wrapper(
+        args: InspectSchemaInput | RunSqlInput | ComparePeriodsInput | DecomposeMetricInput,
+    ):
         from agent.tools.run_sql import build_connection
 
         conn = build_connection(os.getenv("PARQUET_DIR", "data/parquet"))
         try:
             if name == "inspect_schema":
                 from agent.tools.inspect_schema import inspect_schema as _fn
+
                 return _fn(args).model_dump()  # type: ignore[arg-type]
             elif name == "run_sql":
                 from agent.tools.run_sql import run_sql as _fn
+
                 return _fn(args, conn).model_dump()  # type: ignore[arg-type]
             elif name == "compare_periods":
                 from agent.tools.compare_periods import compare_periods as _fn
+
                 return _fn(args, conn).model_dump()  # type: ignore[arg-type]
             elif name == "decompose_metric":
                 from agent.tools.decompose_metric import decompose_metric as _fn
+
                 return _fn(args, conn).model_dump()  # type: ignore[arg-type]
         finally:
             conn.close()
+
     return wrapper
 
 
@@ -134,6 +145,7 @@ def _get_tools():  # type: ignore[reportReturnType]
 # Tool executor node
 # ---------------------------------------------------------------------------
 
+
 def execute_tools(state: InvestigationState) -> InvestigationState:
     """Run every pending tool call and append an EvidenceEntry for each."""
     if not state.pending_tool_calls:
@@ -150,18 +162,22 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
             try:
                 if tool_name == "inspect_schema":
                     from agent.tools.inspect_schema import inspect_schema as _fn
+
                     inp = InspectSchemaInput(**args)
                     output = _fn(inp).model_dump()
                 elif tool_name == "run_sql":
                     from agent.tools.run_sql import run_sql as _fn
+
                     inp = RunSqlInput(**args)
                     output = _fn(inp, conn).model_dump()
                 elif tool_name == "compare_periods":
                     from agent.tools.compare_periods import compare_periods as _fn
+
                     inp = ComparePeriodsInput(**args)
                     output = _fn(inp, conn).model_dump()
                 elif tool_name == "decompose_metric":
                     from agent.tools.decompose_metric import decompose_metric as _fn
+
                     inp = DecomposeMetricInput(**args)
                     output = _fn(inp, conn).model_dump()
                 else:
@@ -175,6 +191,7 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
 
             # Add ToolMessage so the LLM sees the result in the next turn.
             from langchain_core.messages import ToolMessage
+
             tc.output = output
             state.messages.append(
                 ToolMessage(
@@ -202,6 +219,7 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
 # LLM call node
 # ---------------------------------------------------------------------------
 
+
 def llm_call(state: InvestigationState) -> InvestigationState:
     """Send messages to the LLM; collect tool calls into pending_tool_calls."""
     llm = get_llm()
@@ -221,11 +239,13 @@ def llm_call(state: InvestigationState) -> InvestigationState:
 
     pending: list[ToolResult] = []
     for tc in response.tool_calls or []:
-        pending.append(ToolResult(
-            tool_name=tc["name"],
-            args={**tc["args"], "_tool_call_id": tc.get("id", "")},
-            output={},
-        ))
+        pending.append(
+            ToolResult(
+                tool_name=tc["name"],
+                args={**tc["args"], "_tool_call_id": tc.get("id", "")},
+                output={},
+            )
+        )
     state.pending_tool_calls = pending
 
     return state
@@ -235,10 +255,12 @@ def llm_call(state: InvestigationState) -> InvestigationState:
 # Phase-stepping nodes
 # ---------------------------------------------------------------------------
 
+
 def _make_phase_node(phase: Phase):
     def node(state: InvestigationState) -> InvestigationState:
         state.phase = phase
         return llm_call(state)
+
     return node
 
 
@@ -246,12 +268,13 @@ def _make_phase_node(phase: Phase):
 # Critique node
 # ---------------------------------------------------------------------------
 
+
 def critique(state: InvestigationState) -> InvestigationState:
     """Ask the LLM to evaluate evidence strength; decide loop or report."""
     critique_prompt = _render_critique(
         user_question=state.user_question,
         hypotheses=_format_hypotheses(state.hypotheses),
-        evidence_summary=_format_evidence(state.evidence),
+        evidence_summary=_format_evidence(state.evidence, full_output=True),
         evidence_count=len(state.evidence),
         retry_count=state.retry_count,
         max_retries=MAX_RETRIES,
@@ -262,7 +285,9 @@ def critique(state: InvestigationState) -> InvestigationState:
 
     text = response.content if isinstance(response.content, str) else str(response.content)
     text_lower = text.lower().strip()
-    first_line = text_lower.split("\n")[0]
+    # Strip Markdown bold markers and code-fence backticks so "**VERDICT: strong**"
+    # and "`VERDICT: strong`" both parse correctly.
+    first_line = text_lower.split("\n")[0].strip("* `")
     if first_line.startswith("verdict:") and "strong" in first_line:
         state.critique_passed = True
     elif "evidence is strong" in text_lower or "proceed to report" in text_lower:
@@ -282,19 +307,23 @@ def critique(state: InvestigationState) -> InvestigationState:
 # Report node
 # ---------------------------------------------------------------------------
 
+
 def report(state: InvestigationState) -> InvestigationState:
     """Assemble and store the final report dict."""
     report_prompt = (
         f"Based on the investigation of: {state.user_question}\n\n"
         f"Hypotheses considered:\n{_format_hypotheses(state.hypotheses)}\n\n"
-        f"Evidence:\n{_format_evidence(state.evidence)}\n\n"
-        f"Write a concise structured report with: root_cause, supporting_evidence (by hypothesis id), "
-        f"confidence (high/medium/low), and next_steps (what would confirm this)."
+        f"Evidence (full tool outputs):\n{_format_evidence(state.evidence, full_output=True)}\n\n"
+        f"Write a concise structured report with: root_cause, supporting_evidence (cite specific "
+        f"numbers from the evidence), confidence (high/medium/low), and next_steps (what would confirm this). "
+        f"Make sure to note any hypotheses that were investigated and ruled out."
     )
 
     llm = get_llm()
     # MiniMax rejects single HumanMessage; prepend a dummy HumanMessage to keep it happy.
-    response = llm.invoke([HumanMessage(content="Please answer."), HumanMessage(content=report_prompt)])
+    response = llm.invoke(
+        [HumanMessage(content="Please answer."), HumanMessage(content=report_prompt)]
+    )
 
     state.final_report = {
         "user_question": state.user_question,
@@ -311,6 +340,7 @@ def report(state: InvestigationState) -> InvestigationState:
 # Build the graph
 # ---------------------------------------------------------------------------
 
+
 def build_graph():
     builder = StateGraph(InvestigationState)
 
@@ -322,8 +352,22 @@ def build_graph():
     for phase in [Phase.PLAN, Phase.DECOMPOSE, Phase.DRILL, Phase.CROSS_CHECK]:
         builder.add_node(phase.value, _make_phase_node(phase))
 
-    def route_after_llm(state: InvestigationState) -> Literal["execute_tools", "critique"]:
-        return "execute_tools" if state.pending_tool_calls else "critique"
+    # Linear pipeline: each phase advances to the next when the LLM stops calling tools.
+    # On critique retry, decompose re-enters → drill → cross_check → critique.
+    _phase_next: dict[Phase, str] = {
+        Phase.PLAN: "decompose",
+        Phase.DECOMPOSE: "drill",
+        Phase.DRILL: "cross_check",
+        Phase.CROSS_CHECK: "critique",
+    }
+
+    def route_after_llm(state: InvestigationState) -> str:
+        if len(state.evidence) >= MAX_TOOL_CALLS:
+            logger.warning("Tool call cap (%d) reached; forcing critique.", MAX_TOOL_CALLS)
+            return "critique"
+        if state.pending_tool_calls:
+            return "execute_tools"
+        return _phase_next.get(state.phase, "critique")
 
     for phase in [Phase.PLAN, Phase.DECOMPOSE, Phase.DRILL, Phase.CROSS_CHECK]:
         builder.add_conditional_edges(phase.value, route_after_llm)

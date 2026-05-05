@@ -1,6 +1,5 @@
 """Smoke tests for agent/state.py and agent/graph.py."""
 
-
 from agent.graph import build_graph
 from agent.state import (
     EvidenceEntry,
