@@ -168,6 +168,21 @@ class TestLooksLikeRcaQuestion:
 # ---------------------------------------------------------------------------
 
 
+def _mock_graph_stream(chunks: list[dict]):
+    """Return a mock graph whose .stream() yields the given chunks."""
+    mock_graph = MagicMock()
+    mock_graph.stream.return_value = iter(chunks)
+    return mock_graph
+
+
+def _mock_status():
+    """Return a mock st.status context manager."""
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=ctx)
+    ctx.__exit__ = MagicMock(return_value=False)
+    return ctx
+
+
 class TestRunInvestigation:
     def test_returns_report_on_success(self):
         from streamlit_app import run_investigation
@@ -179,12 +194,12 @@ class TestRunInvestigation:
             "evidence_count": 2,
             "error": None,
         }
-        fake_result = {"final_report": fake_report, "evidence": []}
+        chunks = [{"final_report": fake_report, "evidence": [], "phase": "plan"}]
 
-        mock_graph = MagicMock()
-        mock_graph.invoke.return_value = fake_result
-
-        with patch("streamlit_app.get_graph", return_value=mock_graph):
+        with (
+            patch("streamlit_app.get_graph", return_value=_mock_graph_stream(chunks)),
+            patch("streamlit_app.st.status", return_value=_mock_status()),
+        ):
             report, evidence, err = run_investigation("Why?")
 
         assert report == fake_report
@@ -193,14 +208,12 @@ class TestRunInvestigation:
     def test_returns_error_string_when_no_report(self):
         from streamlit_app import run_investigation
 
-        mock_graph = MagicMock()
-        mock_graph.invoke.return_value = {
-            "final_report": None,
-            "error": "graph blew up",
-            "evidence": [],
-        }
+        chunks = [{"final_report": None, "error": "graph blew up", "evidence": [], "phase": "plan"}]
 
-        with patch("streamlit_app.get_graph", return_value=mock_graph):
+        with (
+            patch("streamlit_app.get_graph", return_value=_mock_graph_stream(chunks)),
+            patch("streamlit_app.st.status", return_value=_mock_status()),
+        ):
             report, evidence, err = run_investigation("Why?")
 
         assert report is None
@@ -210,9 +223,12 @@ class TestRunInvestigation:
         from streamlit_app import run_investigation
 
         mock_graph = MagicMock()
-        mock_graph.invoke.side_effect = RuntimeError("connection refused")
+        mock_graph.stream.side_effect = RuntimeError("connection refused")
 
-        with patch("streamlit_app.get_graph", return_value=mock_graph):
+        with (
+            patch("streamlit_app.get_graph", return_value=mock_graph),
+            patch("streamlit_app.st.status", return_value=_mock_status()),
+        ):
             report, evidence, err = run_investigation("Why?")
 
         assert report is None
@@ -222,14 +238,23 @@ class TestRunInvestigation:
         from streamlit_app import run_investigation
 
         ev = [{"phase": "plan", "tool_name": "inspect_schema", "args": {}, "output": {}}]
-        fake_result = {
-            "final_report": {"text": "ok", "hypotheses": [], "evidence_count": 1, "error": None},
-            "evidence": ev,
-        }
-        mock_graph = MagicMock()
-        mock_graph.invoke.return_value = fake_result
+        chunks = [
+            {
+                "final_report": {
+                    "text": "ok",
+                    "hypotheses": [],
+                    "evidence_count": 1,
+                    "error": None,
+                },
+                "evidence": ev,
+                "phase": "plan",
+            }
+        ]
 
-        with patch("streamlit_app.get_graph", return_value=mock_graph):
+        with (
+            patch("streamlit_app.get_graph", return_value=_mock_graph_stream(chunks)),
+            patch("streamlit_app.st.status", return_value=_mock_status()),
+        ):
             _, evidence, _ = run_investigation("Why?")
 
         assert len(evidence) == 1

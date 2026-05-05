@@ -372,6 +372,7 @@ tables:
       id:
         type: int
         fill_rate: full
+        description: "Primary key of the campaigns table. When joining or filtering campaigns directly, use 'campaigns.id' — NOT 'campaign_id' (that column lives in messages, not here)."
 
       campaign_type:
         type: enum
@@ -720,16 +721,19 @@ metrics:
   messages_sent:
     description: Total messages sent.
     type: count
+    time_column: messages.sent_at
     sql: "COUNT(messages.message_id)"
 
   unique_recipients:
     description: Distinct clients reached.
     type: count_distinct
+    time_column: messages.sent_at
     sql: "COUNT(DISTINCT messages.client_id)"
 
   campaigns_run:
     description: Distinct campaigns active in the period.
     type: count_distinct
+    time_column: messages.sent_at
     sql: "COUNT(DISTINCT messages.campaign_id)"
 
   # --- Engagement rate metrics ---
@@ -751,6 +755,7 @@ metrics:
       For more reliable engagement signal, use click_through_rate or
       click_to_open_rate.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
     applicable_channels: [email, mobile_push]
@@ -776,6 +781,7 @@ metrics:
       absolute terms than open rate (most opens don't lead to clicks) but
       more diagnostic of message effectiveness.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
     typical_baselines:
@@ -795,6 +801,7 @@ metrics:
       enough to click? Industry uses click-to-open as the cleanest test of
       whether the BODY content of the message worked.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
     denominator: "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
 
@@ -809,6 +816,7 @@ metrics:
       dataset), but the long tail can stretch to 100+ days. The retailer's
       attribution window is not documented.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_purchased THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
     typical_baselines:
@@ -829,6 +837,7 @@ metrics:
       message, wrong frequency). Healthy industry baseline is <2 per 1000;
       this dataset runs at 3-5 per 1000 (somewhat elevated).
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_unsubscribed THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
@@ -840,6 +849,7 @@ metrics:
       Healthy <2 per 1000; concerning >5 per 1000. This dataset's mail.ru
       runs ~6 per 1000 — already in the concerning range.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_hard_bounced THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
@@ -851,6 +861,7 @@ metrics:
       can result in ISP-level blocking. Email only — push and SMS have
       no spam-complaint mechanism.
     type: ratio
+    time_column: messages.sent_at
     numerator:   "SUM(CASE WHEN messages.is_complained THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
@@ -863,6 +874,7 @@ metrics:
       <90% indicates serious problems with list hygiene or sender
       reputation.
     type: ratio
+    time_column: messages.sent_at
     numerator: |
       SUM(CASE WHEN NOT messages.is_hard_bounced
                  AND NOT messages.is_soft_bounced

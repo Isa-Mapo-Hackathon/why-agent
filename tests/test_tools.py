@@ -31,10 +31,10 @@ tables:
     grain: "One row per item."
     description: "Grocery catalog."
     columns:
-      - name: id
+      id:
         type: BIGINT
         description: "Primary key."
-      - name: price
+      price:
         type: DOUBLE
         description: "Price in USD."
     joins:
@@ -44,7 +44,7 @@ tables:
     grain: "One row per order."
     description: "Order records."
     columns:
-      - name: id
+      id:
         type: BIGINT
         description: "Order ID."
 
@@ -63,6 +63,13 @@ dimensions:
     description: "Store name."
     sql: "items.store"
     cardinality: 2
+
+joins:
+  - name: items_to_orders
+    left: items.id
+    right: orders.item_id
+    join_kind: inner
+    notes: "Each order references one item."
 """
 
 
@@ -85,13 +92,13 @@ tables:
     grain: "One row per event."
     description: "Timestamped events with amounts."
     columns:
-      - name: ts
+      ts:
         type: TIMESTAMP
         description: "Event time."
-      - name: amount
+      amount:
         type: DOUBLE
         description: "Amount."
-      - name: category
+      category:
         type: VARCHAR
         description: "Category label."
 
@@ -483,6 +490,95 @@ class TestInspectSchema:
         assert result.error is None
         assert "items" in result.tables
 
+    def test_catalog_includes_joins(self, sl_path: str) -> None:
+        result = inspect_schema(InspectSchemaInput(), sl_path)
+
+        assert result.joins is not None
+        assert len(result.joins) == 1
+        j = result.joins[0]
+        assert j.left_col == "items.id"
+        assert j.right_col == "orders.item_id"
+        assert j.join_kind == "INNER"
+        assert "INNER JOIN" in j.sql
+        assert "items.id" in j.sql
+        assert "orders.item_id" in j.sql
+
+    def test_catalog_no_joins_returns_empty_list(self, tmp_path) -> None:
+        p = tmp_path / "nojoin.yml"
+        p.write_text("tables:\nmetrics:\ndimensions:\n")
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.joins == []
+
+    def test_table_lookup_does_not_include_joins_field(self, sl_path: str) -> None:
+        # joins are only in the catalog response, not per-table responses
+        result = inspect_schema(InspectSchemaInput(table="items"), sl_path)
+
+        assert result.joins is None
+
+    def test_malformed_join_missing_left_is_skipped(self, tmp_path) -> None:
+        p = tmp_path / "badjoin.yml"
+        p.write_text(
+            "tables:\nmetrics:\ndimensions:\n"
+            "joins:\n  - name: bad\n    right: orders.item_id\n    join_kind: inner\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.joins == []
+
+    def test_malformed_join_unqualified_right_is_skipped(self, tmp_path) -> None:
+        p = tmp_path / "badjoin2.yml"
+        p.write_text(
+            "tables:\nmetrics:\ndimensions:\n"
+            "joins:\n  - name: bad\n    left: items.id\n    right: item_id\n    join_kind: inner\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.joins == []
+
+    def test_catalog_includes_gotchas_for_critical_and_high(self, tmp_path) -> None:
+        p = tmp_path / "gotchas.yml"
+        p.write_text(
+            "tables:\nmetrics:\ndimensions:\n"
+            "gotchas:\n"
+            "  - name: watch_nulls\n    severity: critical\n    description: Always IS NOT TRUE.\n"
+            "  - name: medium_note\n    severity: medium\n    description: Less important.\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.gotchas is not None
+        # 1 YAML gotcha + 3 hardcoded SQL correctness rules
+        assert len(result.gotchas) == 4
+        yaml_gotcha = result.gotchas[0]
+        assert "CRITICAL" in yaml_gotcha
+        assert "watch_nulls" in yaml_gotcha
+
+    def test_catalog_no_gotchas_returns_none(self, sl_path: str) -> None:
+        # No YAML gotchas, but hardcoded SQL rules are always included
+        result = inspect_schema(InspectSchemaInput(), sl_path)
+
+        assert result.gotchas is not None
+        assert all("sql_" in g for g in result.gotchas)
+
+    def test_catalog_includes_dimension_notes(self, tmp_path) -> None:
+        p = tmp_path / "dimnotes.yml"
+        p.write_text(
+            "tables:\nmetrics:\n"
+            "dimensions:\n"
+            "  key_dim:\n"
+            "    description: The most important dimension.\n"
+            "    primary_for_demo: true\n"
+            "    notes: Always check this first.\n"
+            "  plain_dim:\n"
+            "    description: Just a regular dim.\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.dimension_notes is not None
+        assert "key_dim" in result.dimension_notes
+        assert "PRIMARY DEMO DIMENSION" in result.dimension_notes["key_dim"]
+        assert "plain_dim" in result.dimension_notes
+
 
 # ---------------------------------------------------------------------------
 # compare_periods behaviour
@@ -494,19 +590,20 @@ _EMPTY = TimeWindow(start="2025-01-01", end="2025-02-01")
 
 
 class TestComparePeriods:
-    def test_static_metric_same_both_windows(
+    def test_static_metric_no_time_column_returns_error(
         self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
     ) -> None:
-        # static_total = SUM(amount) = 100 regardless of window
+        # static_total has time_column: null — compare_periods must reject it
+        # rather than silently returning the same global value for both windows.
         result = compare_periods(
             ComparePeriodsInput(metric="static_total", before=_JAN, after=_FEB), conn_cp, sl_cp
         )
 
-        assert result.error is None
-        assert result.before_value == pytest.approx(100.0)
-        assert result.after_value == pytest.approx(100.0)
-        assert result.abs_delta == pytest.approx(0.0)
-        assert result.pct_delta == pytest.approx(0.0)
+        assert result.error is not None
+        assert result.hint is not None
+        assert "time_column" in result.error
+        assert result.abs_delta is None
+        assert result.before_value is None
 
     def test_windowed_count_positive_delta(
         self, conn_cp: duckdb.DuckDBPyConnection, sl_cp: str
@@ -626,13 +723,13 @@ tables:
     grain: "One row per event."
     description: "Timestamped events."
     columns:
-      - name: ts
+      ts:
         type: TIMESTAMP
         description: "Event time."
-      - name: amount
+      amount:
         type: DOUBLE
         description: "Amount."
-      - name: category
+      category:
         type: VARCHAR
         description: "Category."
 

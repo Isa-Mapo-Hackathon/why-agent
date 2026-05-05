@@ -22,6 +22,7 @@ You are the primary code-writer for this project. The human team supervises, rev
 - Add authentication, multi-tenancy, or user accounts
 - Push to `main` once the public demo URL is live (branch + PR instead — see workflow)
 - Change any value in the "Locked decisions" table below
+- Add dataset-specific or table-specific prompt into system prompts or any tools
 - Edit, overwrite, move, or delete any file in `data/parquet/` — these are the source dataset, treat them as read-only
 
 **Ask first, then proceed (a quick "ok" is enough):**

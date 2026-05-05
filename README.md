@@ -171,6 +171,8 @@ The current demo dataset is a marketing/CRM extract:
 | `holidays.parquet` | Holiday calendar for seasonality context |
 | `messages.parquet` | Message-level send/open/click events |
 
+**DuckDB view registration:** All `*.parquet` files in `PARQUET_DIR` are registered as independent DuckDB views named after their file stem. There are no implicit JOINs between views — cross-table queries require explicit `INNER JOIN` / `LEFT JOIN` clauses. The agent learns which tables need joining from the `joins` section returned by `inspect_schema`, and writes SQL with explicit joins. This keeps the system generic: any set of parquet files is registered as-is, and the semantic layer YAML defines the relationships.
+
 ### The semantic layer
 
 A single `data/semantic_layer.yml` file. ~80–150 lines. Defines:
