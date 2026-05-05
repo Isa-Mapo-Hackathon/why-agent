@@ -57,6 +57,13 @@ data_shape:
         production layer are degenerate here — every message falls into
         the "pre_purchase" / "never_purchased" bucket.
 
+    - name: convertor_split
+      description: >
+        Of 3.35M unique recipients, 350,440 (10.45%) eventually made a
+        purchase (sometime in 2021–2023, well after the 6-week window).
+        The remaining 89.55% have no purchase record. This split is the
+        primary composition dimension viable in this slice.
+
     - name: only_three_partial_months
       description: >
         Email volume by month: Apr (74K), May (4.25M), Jun (1.45M).
@@ -120,17 +127,77 @@ tables:
         type: enum
         values: [bulk, trigger, transactional]
         fill_rate: full
+        value_meanings:
+          bulk: |
+            Mass send to a segment of recipients grouped by some condition
+            (e.g., "visitors who didn't receive any bulk campaign in the last
+            3 months"). A bulk campaign is sent ONCE — start to finish, then
+            done. Most campaigns in this dataset are bulk (1830 of 1907).
+            Lower per-message engagement than trigger/transactional because
+            recipients didn't ask for these.
+          trigger: |
+            1:1 message sent as a reaction to a specific user action.
+            Classic example: "abandoned cart" — if a user adds something
+            to cart and doesn't purchase within 2 hours, a trigger fires.
+            Triggers run continuously (forever) once configured. They have
+            higher per-message conversion than bulk because they catch
+            users at moments of intent, but in this dataset they don't
+            necessarily open at higher rates than bulk.
+          transactional: |
+            Informational messages tied to specific events: "one-time
+            password," "email confirmation," "bonuses added to your
+            account," order receipts. Recipients EXPECT these messages
+            and actively look for them. As a result, transactional has
+            dramatically higher open rates (~32% in this slice vs ~17%
+            for bulk/trigger) and higher conversion rates. Including
+            transactional in "engagement" comparisons is a common analyst
+            mistake — it's a structurally different message class.
+        notes: |
+          Industry baseline expectations:
+            - Bulk:           17-22% open rate, 1-3% CTR
+            - Trigger:        20-30% open rate, 4-8% CTR (intent-driven)
+            - Transactional:  30-50% open rate, 5-10% CTR (expected mail)
+          In THIS dataset's 6-week slice, bulk and trigger have nearly
+          identical open rates (both ~17%), which is unusual. Triggers
+          still outperform on CTR and conversion, just not on opens.
 
       channel:
         type: enum
         values_present: [email, mobile_push, web_push]
         values_absent: [sms]
         fill_rate: full
+        value_meanings:
+          email: |
+            Has subject, body (usually HTML with offers and personalization),
+            and the full set of metrics: opens, clicks, spam complaints, hard
+            bounces, soft bounces, unsubscribes. Email is where almost all
+            attributed conversions happen in this slice (12,340 of 12,340).
+          mobile_push: |
+            Mobile app push notifications. Has subject (the main line) and
+            optional body. CRITICALLY: mobile push does NOT support
+            unsubscribe, soft bounce, or spam complaint events — those
+            columns will always be False/NULL for push messages. This is by
+            design, not a data quality issue. Open rate is structurally
+            lower than email (~12% vs ~19%) because push has different
+            attention dynamics. In this slice, mobile push produces ZERO
+            attributed conversions across 4.2M sends — possibly an
+            attribution-pipeline issue or by-design (push is informational,
+            not driving purchases through this channel).
+          web_push: |
+            Browser push notifications. Same metric structure as mobile push
+            (no unsubscribe / spam / soft-bounce events). The retailer doesn't
+            actively use this channel — only 266 messages exist in the
+            entire 6-week window. Don't draw conclusions from web_push slices.
+          sms: |
+            Text messages. Lacks subject; body only. Has the smallest set of
+            events: deliver, click, purchase, hard bounce. No opens (no way
+            to detect when an SMS is read). No SMS messages exist in this
+            slice (despite the schema supporting it).
         notes: |
-          web_push has 266 messages — effectively unused, do not draw
-          conclusions from this slice. SMS has 0 messages in this slice
-          (the single SMS campaign in campaigns.csv produced no messages
-          here, or its messages fall outside the 6-week window).
+          messages.channel does NOT include 'multichannel' — that value only
+          exists in campaigns.channel (see campaigns table). Multichannel
+          campaigns expand into individual messages on real channels (email,
+          push, sms) at delivery time.
 
       email_provider:
         type: string
@@ -208,6 +275,10 @@ tables:
       is_hard_bounced:
         type: bool
         fill_rate: full
+        description: |
+          Permanent failure to deliver. The recipient's address does not
+          exist (email is invalid, or mobile push token is invalid). High
+          hard bounce rates damage sender reputation with email providers.
 
       hard_bounced_at:
         type: timestamp
@@ -218,6 +289,11 @@ tables:
       is_soft_bounced:
         type: bool
         fill_rate: full
+        description: |
+          Temporary delivery failure. The recipient's address exists but
+          can't accept the message right now (mailbox full, server timeout).
+          Different from hard bounce — provider may accept later attempts.
+          Email/push only; SMS does not have soft bounce.
 
       soft_bounced_at:
         type: timestamp
@@ -228,6 +304,11 @@ tables:
       is_complained:
         type: bool
         fill_rate: full
+        description: |
+          Recipient clicked the "SPAM" button in their email client. This
+          is the strongest negative signal — high complaint rates rapidly
+          destroy sender reputation with the ISP. Email only; mobile push,
+          web push, and SMS do not have spam complaint events.
 
       complained_at:
         type: timestamp
@@ -238,6 +319,12 @@ tables:
       is_blocked:
         type: bool
         fill_rate: full
+        description: |
+          Provider TEMPORARILY refused delivery, with a "you're acting like
+          a spammer" message to the postmaster. NOT a permanent ban —
+          retailer can attempt again later, but the signal indicates the
+          ISP's reputation system is concerned. Often correlates with
+          warmup_mode being needed.
 
       blocked_at:
         type: timestamp
@@ -249,13 +336,20 @@ tables:
       is_purchased:
         type: bool
         fill_rate: full
-        description: "True when recipient made a purchase attributed to this message (within attribution window)"
+        description: |
+          Recipient clicked a link in the message, opened a website or
+          mobile app, and made a purchase. This is the attributed-purchase
+          signal — last-click email/push attribution within whatever window
+          the retailer's tracking applies. The attribution window is not
+          documented in the dataset; investigate is_purchased timing
+          patterns to infer it.
 
       purchased_at:
         type: timestamp
         fill_rate: 0.001
         null_meaning: "NULL when is_purchased = false"
         pairs_with: is_purchased
+        description: "When the attributed purchase happened. Lag from sent_at to purchased_at can be from minutes to weeks."
 
   # ---------------------------------------------------------------------------
   campaigns:
@@ -283,39 +377,125 @@ tables:
         type: enum
         values: [bulk, trigger, transactional]
         fill_rate: full
+        value_meanings:
+          bulk: |
+            Mass send to a segment, sent ONCE. Has start_at and finish_at.
+            Most campaigns are bulk (1830 of 1907). See messages.message_type
+            for full definition.
+          trigger: |
+            Behavioral 1:1 message that runs continuously after configuration.
+            Has a `position` value indicating priority among triggers (lower
+            position = higher priority — only one trigger fires per event,
+            checked in priority order). 27 trigger campaigns in this dataset.
+          transactional: |
+            Informational message tied to specific events (OTP, confirmations,
+            receipts). Runs continuously. 50 transactional campaigns in this
+            dataset.
+        notes: |
+          The key operational difference: bulk runs once and finishes;
+          trigger and transactional run forever. That's why the dataset has
+          many bulk campaigns and few of the others — each bulk is a
+          discrete event, while a single trigger campaign generates messages
+          for years.
 
       channel:
         type: enum
         values: [email, mobile_push, web_push, sms, multichannel]
         fill_rate: full
+        value_meanings:
+          email: "See messages.channel for definition."
+          mobile_push: "See messages.channel for definition."
+          web_push: "See messages.channel for definition."
+          sms: "See messages.channel for definition."
+          multichannel: |
+            A specific kind of TRANSACTIONAL campaign that delivers
+            information through the cheapest available channel for each
+            recipient, falling back to more expensive channels if needed.
+            Typical sequence: try email → if no email, try mobile push →
+            if no push, try web push → if no web push, send SMS. Used for
+            important informational messages where reaching the recipient
+            matters more than channel preference. 27 multichannel campaigns
+            in this dataset.
         notes: |
           messages.channel does NOT include 'multichannel' — multichannel
-          campaigns expand into individual messages on real channels.
+          campaigns expand into individual messages on real channels at
+          delivery time. So when decomposing engagement BY channel, use
+          messages.channel (not campaigns.channel).
 
       topic:
         type: string
         fill_rate: 0.984
         null_meaning: "NULL for ~30 campaigns where topic was not set"
+        description: "Marketing intent of a bulk campaign. The 'why' behind the send."
         cardinality: 28
-        top_values: [sale_out, happy_birthday, offer_after_purchase, leave_review, event]
+        actual_values_in_data:
+          # Counts from full campaigns table (1907 campaigns)
+          # NOTE: real values use SPACES, not underscores (e.g., "sale out" not "sale_out")
+          promotional:
+            - {value: "sale out",       count: 779, meaning: "Standard sale or discount promotion. The dominant topic in this dataset."}
+            - {value: "event",          count: 63,  meaning: "Tied to a specific event (sale day, store event, holiday)."}
+          lifecycle:
+            - {value: "happy birthday", count: 332, meaning: "Birthday greeting/offer to a recipient on or near their birthday."}
+            - {value: "offer after purchase", count: 316, meaning: "Follow-up offer sent some time after a purchase. Cross-sell or repeat-purchase nudge."}
+            - {value: "leave review",   count: 287, meaning: "Request to write a review of a recent purchase."}
+            - {value: "welcome campaign", count: 27, meaning: "Welcome series for new sign-ups."}
+            - {value: "welcome letter", count: 1,   meaning: "Single welcome email (distinct from welcome campaign)."}
+            - {value: "subscribed",     count: 2,   meaning: "Confirmation of subscription to a list or content."}
+            - {value: "double opt in",  count: 1,   meaning: "Confirmation that the recipient confirmed their subscription."}
+            - {value: "profile updated", count: 1,  meaning: "Confirmation that recipient changed profile data."}
+          behavioral_trigger:
+            - {value: "abandoned cart", count: 6,   meaning: "User added to cart but did not check out. Trigger fires after a delay."}
+            - {value: "abandoned view", count: 3,   meaning: "User viewed a product but did not add to cart."}
+            - {value: "abandoned search", count: 2, meaning: "User searched but did not engage further."}
+            - {value: "abandoned category", count: 2, meaning: "User browsed a category without engaging."}
+            - {value: "added to wish list", count: 2, meaning: "Confirmation of adding an item to wishlist."}
+            - {value: "removed from wish list", count: 1, meaning: "Confirmation of removing an item from wishlist."}
+            - {value: "wish list status", count: 1, meaning: "Status update about wishlist items."}
+            - {value: "back in stock",  count: 1,   meaning: "Notification that a previously-out-of-stock item is available."}
+            - {value: "price drop",     count: 2,   meaning: "Notification that a watched item has dropped in price."}
+            - {value: "user added to segment", count: 1, meaning: "Internal notification, may or may not be customer-facing."}
+            - {value: "recent purchase", count: 1,  meaning: "Acknowledgment of a recent purchase."}
+            - {value: "bonuses expired", count: 1,  meaning: "Notification that loyalty bonuses are expiring."}
+          order_status:
+            - {value: "order created",  count: 10, meaning: "Order has been placed."}
+            - {value: "order shipped",  count: 10, meaning: "Order has been dispatched."}
+            - {value: "order ready for pickup", count: 10, meaning: "Order is available for in-store/locker pickup."}
+            - {value: "order pickup still pending", count: 4, meaning: "Reminder that an order is awaiting pickup."}
+            - {value: "order reminder", count: 9, meaning: "Generic reminder about an order."}
+            - {value: "order cancelled", count: 2, meaning: "Order has been cancelled."}
+        notes: |
+          Topic is the meaning/main goal of a bulk campaign. Strong determinant
+          of every rate metric — composition shifts in topic mix are the
+          most common confound when comparing engagement across periods or
+          segments. The topic mix in this 6-week slice is heavily weighted
+          toward "sale out" (779 of 1907 campaigns).
 
       # --- Bulk-only fields (null for trigger/transactional) ---
       started_at:
         type: timestamp
         fill_rate: 0.957
-        null_meaning: "NULL for trigger/transactional campaigns (those run continuously)"
+        null_meaning: "NULL for trigger/transactional campaigns (those run continuously, no discrete launch)"
         pairs_with: campaign_type
+        description: |
+          Date/time in the marketing specialist's LOCAL TIMEZONE when the
+          campaign was launched. Bulk campaigns typically take 30 minutes
+          to 4 hours to send to their full audience.
 
       finished_at:
         type: timestamp
         fill_rate: 0.948
         null_meaning: "NULL for trigger/transactional campaigns; also NULL for bulk campaigns that didn't complete"
+        description: "Date/time when the campaign sent its final message."
 
       total_count:
         type: int
         fill_rate: 0.957
-        null_meaning: "NULL for trigger/transactional campaigns (no fixed audience size)"
-        description: "Number of recipients in a bulk send. Spans the full lifetime of the campaign — may not match messages in the 6-week window."
+        null_meaning: "NULL for trigger/transactional campaigns (no fixed audience size — they run continuously)"
+        description: |
+          Number of recipients in the bulk send (for bulk campaigns only).
+          Reflects the campaign's full lifetime audience — may not match
+          the count of messages in this 6-week demo file if the campaign
+          ran longer than the window.
 
       # --- Tri-state booleans (CRITICAL: see gotcha) ---
       is_test:
@@ -344,60 +524,107 @@ tables:
         null_meaning: "NULL for the 77 trigger/transactional campaigns (warmup doesn't apply)"
         pairs_with: campaign_type
         encoding: tri_state
+        description: |
+          True when a bulk campaign throttles its send rate to build sender
+          reputation with email providers. Used when the retailer has a new
+          recipient database and doesn't want to be flagged as a spammer
+          due to high hard-bounce or complaint rates. Once a "mailing domain"
+          is warmed up, the throttle limit can be lifted.
 
       hour_limit:
         type: int
         fill_rate: 0.016
-        null_meaning: "NULL means no hourly send limit configured"
+        null_meaning: "NULL means no hourly send limit configured (warmup_mode is False or no limit set)"
         pairs_with: warmup_mode
+        description: |
+          Max messages per hour during warmup. Typical values are 500 or
+          1000 messages per hour. Higher values are used once the domain
+          earns provider trust.
 
       position:
         type: int
         fill_rate: 0.013
         null_meaning: "NULL when campaign is not a trigger"
         pairs_with: campaign_type
+        description: |
+          Trigger priority. LOWER position = HIGHER priority. Why this
+          matters: when a recipient's action could fire multiple triggers
+          (e.g., they both abandoned a cart AND their wishlist item dropped
+          in price), only ONE trigger fires. The system checks triggers in
+          priority order, fires the first one whose conditions match, and
+          ignores the rest. This prevents flooding the recipient with
+          competing trigger messages and avoids unsubscribes/complaints.
 
       # --- Subject features (null for the 27 multichannel campaigns) ---
+      # Author's note: due to anonymization the dataset doesn't expose actual
+      # subject text, so these boolean characteristics are provided instead.
+      # Each example below is from the dataset author's own documentation.
       subject_length:
         type: int
         fill_rate: 0.986
         null_meaning: "NULL for the 27 multichannel campaigns (subject ambiguous when routing across channels)"
+        description: "Length of the subject in characters. Sometimes correlates with open rate (very short or very long subjects can underperform a sweet spot)."
 
       subject_with_personalization:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject includes recipient personalization (typically the recipient's
+          name or other personal data). Author's example: "Hello, John Wick,
+          there is the special delivery for you!"
 
       subject_with_deadline:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject mentions a time-limit or urgency cue. Author's example:
+          "Hey, John Wick! Only 4 days left when you can get your special
+          delivery!"
 
       subject_with_emoji:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject contains one or more emoji characters. Author's example:
+          "Hello, John Wick, there is the special delivery for you 😵🍺"
 
       subject_with_bonuses:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject mentions loyalty bonuses or points. Author's example:
+          "Hey, John Wick! We added 300 gold coins to your bonus account!"
 
       subject_with_discount:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject mentions a discount or percent off. Author's example:
+          "Hey, John Wick! 40% discount in Continental for a low season!"
 
       subject_with_saleout:
         type: bool
         fill_rate: 0.986
         null_meaning: "NULL for multichannel campaigns"
+        description: |
+          Subject announces a sale or sale-related event. Author's example:
+          "Hey, John Wick! Black Friday is coming!"
 
   # ---------------------------------------------------------------------------
   holidays:
     description: >
-      Russian and retail-relevant calendar events spanning 2021–2023.
-      Joins to messages on date.
+      Calendar of holidays and retail events that drive bulk-campaign timing.
+      NOT the full list of all official holidays — only those the retailer
+      treats as actionable (most are official holidays; some are retail
+      events like Black Friday, Cyber Monday, Back to School). Per the
+      dataset author, retailers usually send bulk campaigns with offers
+      1-3 days BEFORE a listed date, so this table is useful for
+      identifying scheduled volume spikes vs. real anomalies.
     source_file: holidays.csv
     source_size: 1 KB
     primary_key: date
@@ -406,11 +633,11 @@ tables:
       date:    {type: date,   fill_rate: full}
       holiday: {type: string, fill_rate: full}
     notes: |
-      Holidays span 2021–2023 but only those falling in April 30 – June 14,
-      2021 are reachable from messages. Russian retail holidays in this
-      window: probably Victory Day (May 9), Russia Day (June 12), some local
-      events. Most holidays in the table are outside the demo window and
-      will not match any messages.
+      Holidays span 2021-2023 but only those falling near April 30 - June
+      14, 2021 are reachable from messages in this slice. Russian retail
+      holidays in this window: probably Victory Day (May 9), Russia Day
+      (June 12), and possibly other dates. Most holidays in the table are
+      outside the demo window and will not match any messages.
 
   # ---------------------------------------------------------------------------
   client_first_purchase_date:
@@ -510,62 +737,131 @@ metrics:
     description: >
       Share of messages opened. Email and push only (SMS has no open event;
       no SMS messages exist in this slice anyway).
+    business_meaning: |
+      Open rate measures whether the recipient saw the message — specifically,
+      whether their email client loaded the tracking pixel (for email) or
+      whether the push notification was tapped (for push). Industry treats
+      open rate as a proxy for SUBJECT-LINE QUALITY and SENDER REPUTATION,
+      since it's what happens before the recipient sees any of the body.
+      WARNING: open rate is contaminated by tracking-pixel artifacts. Apple
+      Mail Privacy Protection (since iOS 15, Sept 2021) auto-fetches pixels
+      for Apple Mail users, inflating their measured open rate without any
+      real engagement change. This dataset is mostly Russian email providers
+      (mail.ru, yandex.ru) where this effect is smaller, but still present.
+      For more reliable engagement signal, use click_through_rate or
+      click_to_open_rate.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
     applicable_channels: [email, mobile_push]
+    typical_baselines:
+      email_bulk:          "17-22% (in this dataset: 17.2%)"
+      email_trigger:       "20-30% industry; in this dataset oddly only 17.2%"
+      email_transactional: "30-50% industry; in this dataset 32.2%"
+      mobile_push:         "lower than email — in this dataset ~12%"
     composition_warning: |
-      Open rate baselines differ by channel (email ~19%, mobile_push lower)
-      and by topic (transactional much higher than bulk sale_out) and by
-      eventually_converted status (eventually-converters ~21.3% vs
-      never-converters ~18.3%, in this slice). If aggregate open_rate moves
-      between any two slices, ALWAYS check whether channel/topic/conversion
-      mix shifted before concluding behavior changed.
+      Open rate baselines differ by channel, by topic (transactional much
+      higher than bulk sale_out), and by eventually_converted status
+      (eventually-converters ~21.3% vs never-converters ~18.3%). If aggregate
+      open_rate moves between any two slices, ALWAYS check whether
+      channel/topic/conversion mix shifted before concluding behavior changed.
 
   click_through_rate:
     description: Share of messages clicked.
+    business_meaning: |
+      A more reliable engagement signal than open_rate because clicks
+      require active recipient action (whereas opens can be triggered by
+      automatic pixel-fetching). CTR measures whether the recipient was
+      compelled enough by the subject AND content to take action. Lower in
+      absolute terms than open rate (most opens don't lead to clicks) but
+      more diagnostic of message effectiveness.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
+    typical_baselines:
+      email_bulk:          "1-3% (in this dataset: 2.76%)"
+      email_trigger:       "4-8% (in this dataset: 4.96%)"
+      email_transactional: "5-10% (in this dataset: 5.34%)"
+      mobile_push:         "very low — in this dataset 0.13% (effectively zero)"
     composition_warning: "Same as open_rate — strongly varies by channel, topic, conversion status."
 
   click_to_open_rate:
     description: Of opened messages, share that were clicked.
+    business_meaning: |
+      The most diagnostic engagement metric. Conditioning on opens removes
+      both the inattentive recipient bias (wasn't going to engage anyway)
+      and the tracking-pixel artifact (pixel-fetched without human seeing).
+      What's left: of people who actually saw the message, how many cared
+      enough to click? Industry uses click-to-open as the cleanest test of
+      whether the BODY content of the message worked.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_clicked THEN 1 ELSE 0 END)"
     denominator: "SUM(CASE WHEN messages.is_opened THEN 1 ELSE 0 END)"
 
   conversion_rate:
     description: >
-      Share of messages resulting in an in-window purchase. Note: very low
-      base rate in this slice (<0.5%) since most conversions happen after
-      the 6-week window.
+      Share of messages resulting in an in-window purchase.
+    business_meaning: |
+      The ultimate ROI signal — did the message drive money? "Conversion"
+      here means: recipient clicked, navigated to the website/app, and
+      made a purchase (last-click attribution). Note: most attributed
+      purchases happen WITHIN HOURS of send (median 1.65 hours in this
+      dataset), but the long tail can stretch to 100+ days. The retailer's
+      attribution window is not documented.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_purchased THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
+    typical_baselines:
+      email_bulk:          "0.5-2 per 1000 (in this dataset: 0.85)"
+      email_trigger:       "1-5 per 1000 (in this dataset: 2.18)"
+      email_transactional: "5-15 per 1000 (in this dataset: 6.48)"
+      mobile_push:         "ZERO in this dataset — investigate before drawing conclusions"
     composition_warning: "Strongly varies by topic, channel, conversion status."
 
   # --- Negative-signal rates ---
   unsubscribe_rate:
     description: Share of messages resulting in unsubscribe.
+    business_meaning: |
+      The leading indicator of list health. When unsubscribe rate climbs,
+      the retailer is sending content the recipient considers irrelevant
+      or annoying — even if open rate looks fine. A spike on a specific
+      day usually points to a single bad campaign (wrong audience, wrong
+      message, wrong frequency). Healthy industry baseline is <2 per 1000;
+      this dataset runs at 3-5 per 1000 (somewhat elevated).
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_unsubscribed THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
   hard_bounce_rate:
     description: Share of messages that hard-bounced.
+    business_meaning: |
+      Indicates list quality and provider acceptance. High hard-bounce
+      rates damage sender reputation and can trigger ISP-level blocks.
+      Healthy <2 per 1000; concerning >5 per 1000. This dataset's mail.ru
+      runs ~6 per 1000 — already in the concerning range.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_hard_bounced THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
   spam_complaint_rate:
     description: Share of messages flagged as spam.
+    business_meaning: |
+      The most damaging negative signal. ISPs treat complaint rates above
+      ~1 per 1000 as a serious reputation hit. Anything above 3 per 1000
+      can result in ISP-level blocking. Email only — push and SMS have
+      no spam-complaint mechanism.
     type: ratio
     numerator:   "SUM(CASE WHEN messages.is_complained THEN 1 ELSE 0 END)"
     denominator: "COUNT(messages.message_id)"
 
   delivery_rate:
     description: Share of messages successfully delivered.
+    business_meaning: |
+      Composite reliability metric. Failures here come from hard bounces
+      (bad addresses), soft bounces (temporary failures), and ISP blocks
+      (reputation issues). A healthy retailer hits 95%+ delivery rate;
+      <90% indicates serious problems with list hygiene or sender
+      reputation.
     type: ratio
     numerator: |
       SUM(CASE WHEN NOT messages.is_hard_bounced
@@ -627,17 +923,29 @@ dimensions:
     description: Higher-level topic category for cleaner decompositions.
     sql_case: |
       CASE
-        WHEN campaigns.topic IN ('sale_out', 'event') THEN 'promotional'
-        WHEN campaigns.topic IN ('happy_birthday', 'offer_after_purchase',
-                                  'leave_review', 'welcome_campaign') THEN 'lifecycle'
-        WHEN campaigns.topic IN ('order_created', 'order_shipped',
-                                  'order_ready_for_pickup', 'order_cancelled',
-                                  'order_reminder', 'double_opt_in') THEN 'transactional_topic'
-        WHEN campaigns.topic IN ('abandoned_cart', 'abandoned_view',
-                                  'abandoned_search', 'abandoned_category',
-                                  'price_drop', 'back_in_stock') THEN 'behavioral_trigger'
+        WHEN campaigns.topic IN ('sale out', 'event') THEN 'promotional'
+        WHEN campaigns.topic IN ('happy birthday', 'offer after purchase',
+                                  'leave review', 'welcome campaign',
+                                  'welcome letter', 'subscribed',
+                                  'double opt in', 'profile updated') THEN 'lifecycle'
+        WHEN campaigns.topic IN ('order created', 'order shipped',
+                                  'order ready for pickup',
+                                  'order pickup still pending',
+                                  'order reminder', 'order cancelled') THEN 'order_status'
+        WHEN campaigns.topic IN ('abandoned cart', 'abandoned view',
+                                  'abandoned search', 'abandoned category',
+                                  'price drop', 'back in stock',
+                                  'added to wish list', 'removed from wish list',
+                                  'wish list status', 'recent purchase',
+                                  'bonuses expired', 'user added to segment') THEN 'behavioral_trigger'
         ELSE 'other'
       END
+    bucket_meanings:
+      promotional: "Sales-driven outbound — sale out, event-tied promos. The retailer's main marketing surface."
+      lifecycle: "Customer-relationship messages tied to a recipient's lifecycle position — birthdays, post-purchase touches, welcome series."
+      order_status: "Operational order updates. Highest engagement of any group (these are messages recipients want to see)."
+      behavioral_trigger: "Reactive messages fired by recipient actions (abandoned cart, price drops, wishlist activity)."
+      other: "Catch-all bucket for topics that don't fit cleanly. Should be small."
 
   is_holiday_window:
     derived: true
@@ -794,11 +1102,7 @@ gotchas:
     severity: medium
     description: >
       subject_with_emoji, subject_with_personalization, etc. correlate
-      strongly with topic and channel. The Kaggle notebook author noted
-      campaigns "with emoji" appear to convert better — this is almost
-      certainly composition-driven (which topics use emoji), not causal.
-      This is a documented, reproducible confound and a strong demo
-      candidate.
+      strongly with topic and channel. 
 
   - name: campaigns_table_outlives_messages_window
     severity: medium
