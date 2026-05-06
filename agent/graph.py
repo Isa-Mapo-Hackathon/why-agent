@@ -233,6 +233,7 @@ def llm_call(state: InvestigationState) -> InvestigationState:
         phase=state.phase.value,
         hypotheses=_format_hypotheses(state.hypotheses),
         evidence_summary=_format_evidence(state.evidence),
+        critique_feedback=state.critique_feedback,
     )
 
     all_messages = [SystemMessage(content=system_content)] + list(state.messages)
@@ -311,9 +312,16 @@ def critique(state: InvestigationState) -> InvestigationState:
     first_line = text_lower.split("\n")[0].strip("* `")
     if first_line.startswith("verdict:") and "strong" in first_line:
         state.critique_passed = True
+        state.critique_feedback = None
     elif "evidence is strong" in text_lower or "proceed to report" in text_lower:
         state.critique_passed = True
+        state.critique_feedback = None
     else:
+        # Extract the justification (everything after the first line) as a targeted directive
+        # for the next retry pass so the agent knows exactly what gap to close.
+        justification_lines = [ln.strip() for ln in text.split("\n")[1:] if ln.strip()]
+        state.critique_feedback = " ".join(justification_lines) or None
+
         state.critique_passed = False
         state.retry_count += 1
         if state.retry_count >= MAX_RETRIES:

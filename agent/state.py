@@ -102,6 +102,11 @@ class InvestigationState(BaseModel):
         description="LLM text from the most recent llm_call, attached to the first tool entry of the next batch.",
     )
 
+    critique_feedback: str | None = Field(
+        default=None,
+        description="Explanation from the last VERDICT: weak critique — injected into the next phase as a targeted directive.",
+    )
+
     critique_passed: bool = Field(
         default=False,
         description="Set True by critique node when evidence is strong enough to report.",

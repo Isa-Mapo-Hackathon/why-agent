@@ -82,6 +82,7 @@ Each phase has a strict scope. Do only what the current phase allows, then say *
 {hypotheses}
 **Evidence collected so far:**
 {evidence_summary}
+{critique_feedback}
 
 ---
 

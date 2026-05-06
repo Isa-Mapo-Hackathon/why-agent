@@ -12,11 +12,24 @@ _RAW_SYSTEM = (_PROMPTS_DIR / "system.md").read_text()
 _RAW_CRITIQUE = (_PROMPTS_DIR / "critique.md").read_text()
 
 
-def _render_system(phase: str, hypotheses: str, evidence_summary: str) -> str:
+def _render_system(
+    phase: str,
+    hypotheses: str,
+    evidence_summary: str,
+    critique_feedback: str | None = None,
+) -> str:
+    feedback_block = (
+        f"\n**Critique feedback (previous pass was VERDICT: weak):**\n"
+        f"> {critique_feedback}\n"
+        f"Your priority this pass is to close that specific gap.\n"
+        if critique_feedback
+        else ""
+    )
     return (
         _RAW_SYSTEM.replace("{phase}", phase)
         .replace("{hypotheses}", hypotheses)
         .replace("{evidence_summary}", evidence_summary)
+        .replace("{critique_feedback}", feedback_block)
     )
 
 
