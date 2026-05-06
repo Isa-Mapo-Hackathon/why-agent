@@ -108,8 +108,7 @@ class TestRenderSystem:
             critique_feedback=None,
         )
         assert "VERDICT: weak" not in out
-        assert "critique_feedback" not in out  # placeholder must be substituted, not left raw
-        assert "{critique_feedback}" not in out
+        assert "{critique_feedback}" not in out  # placeholder must be fully substituted
 
     def test_feedback_renders_verdict_header(self):
         out = _render_system(
@@ -148,6 +147,7 @@ class TestRenderSystem:
             evidence_summary="",
         )
         assert "cross_check" in out
+        assert "{phase}" not in out  # all occurrences of the placeholder must be replaced
 
 
 # ---------------------------------------------------------------------------
@@ -182,22 +182,35 @@ class TestCritiqueNode:
         state = _blank_state()
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = _make_llm_response(
-            "VERDICT: weak\nis_holiday_window check missing. eventually_converted not segmented."
+            "VERDICT: weak\nSegment-A check missing. Metric-B not segmented."
         )
         with patch("agent.graph.get_llm", return_value=mock_llm):
             result = critique(state)
+        mock_llm.invoke.assert_called_once()
+        # user_question must appear in what was sent to the LLM
+        prompt_sent = mock_llm.invoke.call_args[0][0][0].content
+        assert state.user_question in prompt_sent
         assert result.critique_passed is False
         assert result.critique_feedback is not None
-        assert "is_holiday_window" in result.critique_feedback
-        assert "eventually_converted" in result.critique_feedback
+        assert "Segment-A check missing" in result.critique_feedback
+        assert "Metric-B not segmented" in result.critique_feedback
 
-    def test_weak_verdict_increments_retry_count(self):
+    def test_weak_verdict_increments_retry_count_from_zero(self):
         state = _blank_state()
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = _make_llm_response("VERDICT: weak\nNot enough.")
         with patch("agent.graph.get_llm", return_value=mock_llm):
             result = critique(state)
         assert result.retry_count == 1
+
+    def test_weak_verdict_increments_retry_count_from_nonzero(self):
+        state = _blank_state()
+        state.retry_count = 1
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("VERDICT: weak\nStill not enough.")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.retry_count == 2
 
     def test_max_retries_forces_report_with_error(self):
         state = _blank_state()
@@ -209,16 +222,34 @@ class TestCritiqueNode:
         assert result.critique_passed is True
         assert result.error is not None
         assert "Max critique retries" in result.error
+        # critique_feedback is non-None at this point (set from the weak response before forced pass)
+        assert result.critique_feedback is not None
 
-    def test_verdict_strong_via_fallback_phrase(self):
+    def test_verdict_strong_via_fallback_evidence_is_strong(self):
         state = _blank_state()
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = _make_llm_response(
-            "The evidence is strong enough. Proceed to report."
-        )
+        mock_llm.invoke.return_value = _make_llm_response("The evidence is strong. Done.")
         with patch("agent.graph.get_llm", return_value=mock_llm):
             result = critique(state)
         assert result.critique_passed is True
+        assert result.critique_feedback is None
+
+    def test_verdict_strong_via_fallback_proceed_to_report(self):
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("Proceed to report now.")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is True
+        assert result.critique_feedback is None
+
+    def test_weak_verdict_no_justification_text_sets_feedback_none(self):
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("VERDICT: weak")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is False
         assert result.critique_feedback is None
 
     def test_weak_verdict_only_justification_lines_captured(self):
