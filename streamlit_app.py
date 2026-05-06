@@ -18,6 +18,7 @@ from agent.state import InvestigationState  # noqa: E402
 logger = logging.getLogger(__name__)
 
 DEMO_QUESTIONS = [
+    "Why did campaign 230 underperform campaign 150? They're both bulk sale-out emails sent within a week of each other, similar volume, similar audience profile. Open rate gap: 27% vs 8%.",
     "Why did message open rate drop in the most recent campaign?",
     "Why does campaign 361 convert 60x better than campaign 296?",
     "Why is weekend engagement consistently lower than weekday?",

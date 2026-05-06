@@ -362,8 +362,7 @@ tables:
       is NOT unique — the same numeric id can appear twice with different
       campaign_type values (e.g. id=366 exists once as 'bulk' and once as
       'transactional'). Always filter or GROUP BY both id AND campaign_type
-      when querying campaigns directly. When joining messages to campaigns,
-      use: JOIN campaigns c ON c.id = m.campaign_id AND c.campaign_type = m.message_type
+      when querying campaigns directly. 
     row_count: 1907
     composition:
       by_campaign_type: {bulk: 1830, transactional: 50, trigger: 27}
@@ -381,10 +380,7 @@ tables:
         fill_rate: full
         description: |
           Part of the composite primary key (id, campaign_type). id alone is
-          NOT unique. When joining to messages, use:
-          JOIN campaigns c ON c.id = m.campaign_id AND c.campaign_type = m.message_type
-          Never join on id alone or you will get duplicate rows for campaigns
-          that share an id across campaign_type values.
+          NOT unique. 
 
       campaign_type:
         type: enum
@@ -682,11 +678,14 @@ tables:
 joins:
 
   - name: messages_to_campaigns
-    left:  messages.campaign_id
-    right: campaigns.id
+    left:  messages.campaign_id, messages.message_type
+    right: campaigns.id, campaigns.campaign_type
     type:  many_to_one
     join_kind: inner
-    notes: "Every message has a campaign_id. INNER JOIN is safe."
+    notes: "Every message has a campaign_id. INNER JOIN is safe. When joining to messages, use:
+          JOIN campaigns c ON c.id = m.campaign_id AND c.campaign_type = m.message_type
+          Never join on id alone or you will get duplicate rows for campaigns
+          that share an id across campaign_type values."
 
   - name: messages_to_holidays
     left:  messages.date
