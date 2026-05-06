@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -155,6 +156,8 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
 
     conn = build_connection(os.getenv("PARQUET_DIR", "data/parquet"))
     try:
+        batch_reasoning = state.pending_reasoning
+        state.pending_reasoning = None
         for tc in state.pending_tool_calls:
             args = tc.args
             tool_name = tc.tool_name
@@ -206,7 +209,9 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
                 args=args,
                 output=output,
                 timestamp=_iso_now(),
+                reasoning=batch_reasoning,
             )
+            batch_reasoning = None  # only attach to the first call in the batch
             state.add_evidence(entry)
 
         state.pending_tool_calls = []
@@ -236,6 +241,12 @@ def llm_call(state: InvestigationState) -> InvestigationState:
     response = llm.bind_tools(_get_tools()).invoke(all_messages)
 
     state.messages.append(response)
+
+    # Capture the LLM's text reasoning for display alongside the next tool calls.
+    raw_content = response.content if isinstance(response.content, str) else ""
+    state.pending_reasoning = (
+        re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip() or None
+    )
 
     pending: list[ToolResult] = []
     for tc in response.tool_calls or []:

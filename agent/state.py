@@ -34,6 +34,9 @@ class EvidenceEntry(BaseModel):
     args: dict[str, Any]
     output: dict[str, Any]
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    reasoning: str | None = Field(
+        default=None, description="LLM reasoning text that preceded this tool call."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,11 @@ class InvestigationState(BaseModel):
     )
 
     messages: list[Any] = Field(default_factory=list)
+
+    pending_reasoning: str | None = Field(
+        default=None,
+        description="LLM text from the most recent llm_call, attached to the first tool entry of the next batch.",
+    )
 
     critique_passed: bool = Field(
         default=False,

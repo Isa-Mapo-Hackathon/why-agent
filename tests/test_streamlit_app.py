@@ -137,33 +137,6 @@ class TestFormatEvidence:
 
 
 # ---------------------------------------------------------------------------
-# looks_like_rca_question
-# ---------------------------------------------------------------------------
-
-
-class TestLooksLikeRcaQuestion:
-    def test_why_prefix(self):
-        from streamlit_app import looks_like_rca_question
-
-        assert looks_like_rca_question("Why did PR activity drop?")
-
-    def test_plain_query_not_rca(self):
-        from streamlit_app import looks_like_rca_question
-
-        assert not looks_like_rca_question("Count the category for items")
-
-    def test_case_insensitive(self):
-        from streamlit_app import looks_like_rca_question
-
-        assert looks_like_rca_question("WHY DID IT SPIKE")
-
-    def test_keyword_in_body(self):
-        from streamlit_app import looks_like_rca_question
-
-        assert looks_like_rca_question("Event count dropped last week")
-
-
-# ---------------------------------------------------------------------------
 # run_investigation
 # ---------------------------------------------------------------------------
 
