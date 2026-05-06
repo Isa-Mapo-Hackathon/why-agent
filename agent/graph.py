@@ -243,7 +243,17 @@ def llm_call(state: InvestigationState) -> InvestigationState:
     state.messages.append(response)
 
     # Capture the LLM's text reasoning for display alongside the next tool calls.
-    raw_content = response.content if isinstance(response.content, str) else ""
+    # response.content may be a string or a list of content blocks (OpenAI-compatible APIs).
+    if isinstance(response.content, str):
+        raw_content = response.content
+    elif isinstance(response.content, list):
+        raw_content = " ".join(
+            block.get("text", "")
+            for block in response.content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    else:
+        raw_content = ""
     state.pending_reasoning = (
         re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip() or None
     )

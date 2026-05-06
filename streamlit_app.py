@@ -71,11 +71,11 @@ def render_evidence(evidence: list[dict]) -> None:
         out = e.get("output", {})
         reasoning = e.get("reasoning") or ""
         has_error = bool(out.get("error"))
-        icon = "⚠️" if has_error else "✓"
+        icon = "⚠️" if has_error else "✅"
         label = f"[{i}] {phase} › {tool}  {icon}"
         with st.expander(label, expanded=False):
             if reasoning:
-                st.markdown(f"**Reasoning:** {reasoning}")
+                st.write(f"**Reasoning:** {_strip_think_tags(reasoning)}")
                 st.divider()
             st.json(out)
 
