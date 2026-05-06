@@ -62,22 +62,27 @@ def format_evidence(evidence: list[dict]) -> str:
 
 
 def render_evidence(evidence: list[dict]) -> None:
-    """Render evidence entries as per-call expanders with full output and reasoning."""
+    """Render evidence entries showing agent input and errors only."""
     if not evidence:
         return
     for i, e in enumerate(evidence, 1):
         phase = e.get("phase", "?")
         tool = e.get("tool_name", "?")
         out = e.get("output", {})
+        args = {k: v for k, v in (e.get("args") or {}).items() if k != "_tool_call_id"}
         reasoning = e.get("reasoning") or ""
         has_error = bool(out.get("error"))
         icon = "⚠️" if has_error else "✅"
         label = f"[{i}] {phase} › {tool}  {icon}"
-        with st.expander(label, expanded=False):
+        with st.expander(label, expanded=has_error):
             if reasoning:
                 st.write(f"**Reasoning:** {_strip_think_tags(reasoning)}")
                 st.divider()
-            st.json(out)
+            st.json(args)
+            if has_error:
+                st.error(out["error"])
+                if out.get("hint"):
+                    st.caption(f"Hint: {out['hint']}")
 
 
 @st.cache_resource
