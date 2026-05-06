@@ -126,6 +126,11 @@ plan → decompose → drill → cross-check → critique → report
 A LangGraph state machine. Each step is an explicit node. State persists
 across the whole investigation.
 
+When critique returns **VERDICT: weak**, its justification text is stored
+in `state.critique_feedback` and injected into the next phase's system
+prompt as a targeted directive — so the agent retries the *specific* gap
+identified, rather than re-exploring from scratch and burning retry budget.
+
 ### The four tools
 
 We deliberately have only four. Fewer integrations = fewer demo
@@ -362,7 +367,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 | LLM client — 3 backends (`minimax`, `vllm`, `replay`) | ✅ done |
 | Pydantic state model (`InvestigationState`) | ✅ done |
 | LangGraph state machine (6-phase loop) | ✅ done |
-| `inspect_schema` tool | ✅ done |
+| `inspect_schema` tool | ✅ done — derived dimensions surface SQL expression |
 | `run_sql` tool | ✅ done |
 | `compare_periods` tool | ✅ done |
 | `decompose_metric` tool | ✅ done |
@@ -388,7 +393,7 @@ cp .env.example .env
 # Set MINIMAX_API_KEY (get from MiniMax dashboard)
 # PARQUET_DIR defaults to data/parquet — point at data/dev for the toy dataset
 
-# Run the test suite (106 tests, no network required)
+# Run the test suite (120 tests, no network required)
 uv run pytest
 
 # Interactive REPL against the real MiniMax API

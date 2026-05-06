@@ -139,6 +139,11 @@ def inspect_schema(
             notes = str(d.get("notes", "")).strip()
             if notes:
                 parts.append(notes)
+            if d.get("derived") and d.get("sql"):
+                parts.append(
+                    f"SQL: {str(d['sql']).strip()} "
+                    "(derived — use this expression in a JOIN/WHERE, do not reference as a bare column)"
+                )
             if parts:
                 dimension_notes[dim_name] = " | ".join(parts)
 

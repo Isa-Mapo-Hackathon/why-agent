@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -155,6 +156,8 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
 
     conn = build_connection(os.getenv("PARQUET_DIR", "data/parquet"))
     try:
+        batch_reasoning = state.pending_reasoning
+        state.pending_reasoning = None
         for tc in state.pending_tool_calls:
             args = tc.args
             tool_name = tc.tool_name
@@ -206,7 +209,9 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
                 args=args,
                 output=output,
                 timestamp=_iso_now(),
+                reasoning=batch_reasoning,
             )
+            batch_reasoning = None  # only attach to the first call in the batch
             state.add_evidence(entry)
 
         state.pending_tool_calls = []
@@ -228,6 +233,7 @@ def llm_call(state: InvestigationState) -> InvestigationState:
         phase=state.phase.value,
         hypotheses=_format_hypotheses(state.hypotheses),
         evidence_summary=_format_evidence(state.evidence),
+        critique_feedback=state.critique_feedback,
     )
 
     all_messages = [SystemMessage(content=system_content)] + list(state.messages)
@@ -236,6 +242,22 @@ def llm_call(state: InvestigationState) -> InvestigationState:
     response = llm.bind_tools(_get_tools()).invoke(all_messages)
 
     state.messages.append(response)
+
+    # Capture the LLM's text reasoning for display alongside the next tool calls.
+    # response.content may be a string or a list of content blocks (OpenAI-compatible APIs).
+    if isinstance(response.content, str):
+        raw_content = response.content
+    elif isinstance(response.content, list):
+        raw_content = " ".join(
+            block.get("text", "")
+            for block in response.content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    else:
+        raw_content = ""
+    state.pending_reasoning = (
+        re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip() or None
+    )
 
     pending: list[ToolResult] = []
     for tc in response.tool_calls or []:
@@ -290,9 +312,16 @@ def critique(state: InvestigationState) -> InvestigationState:
     first_line = text_lower.split("\n")[0].strip("* `")
     if first_line.startswith("verdict:") and "strong" in first_line:
         state.critique_passed = True
+        state.critique_feedback = None
     elif "evidence is strong" in text_lower or "proceed to report" in text_lower:
         state.critique_passed = True
+        state.critique_feedback = None
     else:
+        # Extract the justification (everything after the first line) as a targeted directive
+        # for the next retry pass so the agent knows exactly what gap to close.
+        justification_lines = [ln.strip() for ln in text.split("\n")[1:] if ln.strip()]
+        state.critique_feedback = " ".join(justification_lines) or None
+
         state.critique_passed = False
         state.retry_count += 1
         if state.retry_count >= MAX_RETRIES:

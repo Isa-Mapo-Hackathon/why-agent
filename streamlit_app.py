@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -23,27 +22,6 @@ DEMO_QUESTIONS = [
     "Why does campaign 361 convert 60x better than campaign 296?",
     "Why is weekend engagement consistently lower than weekday?",
 ]
-
-_RCA_KEYWORDS = {
-    "why",
-    "cause",
-    "reason",
-    "explain",
-    "investigate",
-    "dropped",
-    "spiked",
-    "changed",
-    "moved",
-    "decline",
-    "increased",
-    "decreased",
-    "anomaly",
-}
-
-
-def looks_like_rca_question(question: str) -> bool:
-    """Return True if the question looks like a root-cause investigation."""
-    return any(kw in question.lower() for kw in _RCA_KEYWORDS)
 
 
 def _strip_think_tags(text: str) -> str:
@@ -70,7 +48,7 @@ def format_report(report: dict) -> str:
 
 
 def format_evidence(evidence: list[dict]) -> str:
-    """Format evidence entries as a numbered text block."""
+    """Return a plain-text summary of evidence entries (used by tests)."""
     if not evidence:
         return ""
     lines: list[str] = []
@@ -78,10 +56,33 @@ def format_evidence(evidence: list[dict]) -> str:
         phase = e.get("phase", "?")
         tool = e.get("tool_name", "?")
         out = e.get("output", {})
-        err_tag = " ⚠️ ERROR" if out.get("error") else ""
-        snippet = json.dumps(out, default=str)[:200]
-        lines.append(f"[{i}] {phase} › {tool}{err_tag}\n    {snippet}")
-    return "\n\n".join(lines)
+        err_tag = " ⚠️" if out.get("error") else ""
+        lines.append(f"[{i}] {phase} › {tool}{err_tag}")
+    return "\n".join(lines)
+
+
+def render_evidence(evidence: list[dict]) -> None:
+    """Render evidence entries showing agent input and errors only."""
+    if not evidence:
+        return
+    for i, e in enumerate(evidence, 1):
+        phase = e.get("phase", "?")
+        tool = e.get("tool_name", "?")
+        out = e.get("output", {})
+        args = {k: v for k, v in (e.get("args") or {}).items() if k != "_tool_call_id"}
+        reasoning = e.get("reasoning") or ""
+        has_error = bool(out.get("error"))
+        icon = "⚠️" if has_error else "✅"
+        label = f"[{i}] {phase} › {tool}  {icon}"
+        with st.expander(label, expanded=has_error):
+            if reasoning:
+                st.write(f"**Reasoning:** {_strip_think_tags(reasoning)}")
+                st.divider()
+            st.json(args)
+            if has_error:
+                st.error(out["error"])
+                if out.get("hint"):
+                    st.caption(f"Hint: {out['hint']}")
 
 
 @st.cache_resource
@@ -173,14 +174,6 @@ def main() -> None:
     question = pending or question
 
     if question:
-        if not looks_like_rca_question(question):
-            st.warning(
-                "why-agent is built for root-cause questions like "
-                "**'Why did message open rate drop last campaign?'** — "
-                "try rephrasing with 'why', 'what caused', or describing a change.",
-                icon="💡",
-            )
-
         report, evidence, err = run_investigation(question)
 
         st.session_state["history"].append(
@@ -213,7 +206,7 @@ def main() -> None:
                 evidence = entry.get("evidence") or []
                 if evidence:
                     with st.expander(f"Evidence trace ({len(evidence)} tool calls)"):
-                        st.code(format_evidence(evidence), language=None)
+                        render_evidence(evidence)
 
             elif entry.get("error"):
                 st.error(entry["error"])
