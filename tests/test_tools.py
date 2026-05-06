@@ -626,11 +626,14 @@ class TestInspectSchema:
         assert result.error is None
         assert result.dimension_notes is not None
         assert "computed_flag" in result.dimension_notes
+        assert "SQL:" not in result.dimension_notes["computed_flag"]
 
     def test_derived_dimension_sql_on_real_layer(self) -> None:
+        import pathlib
+
         result = inspect_schema(
             InspectSchemaInput(),
-            "data/semantic_layer_6w.yml",
+            str(pathlib.Path(__file__).parent.parent / "data" / "semantic_layer_6w.yml"),
         )
 
         assert result.dimension_notes is not None

@@ -141,7 +141,7 @@ def inspect_schema(
                 parts.append(notes)
             if d.get("derived") and d.get("sql"):
                 parts.append(
-                    f"SQL: {d['sql'].strip()} "
+                    f"SQL: {str(d['sql']).strip()} "
                     "(derived — use this expression in a JOIN/WHERE, do not reference as a bare column)"
                 )
             if parts:
