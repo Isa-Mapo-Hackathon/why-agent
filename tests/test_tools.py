@@ -579,6 +579,65 @@ class TestInspectSchema:
         assert "PRIMARY DEMO DIMENSION" in result.dimension_notes["key_dim"]
         assert "plain_dim" in result.dimension_notes
 
+    def test_derived_dimension_sql_included_in_notes(self, tmp_path) -> None:
+        p = tmp_path / "derived.yml"
+        p.write_text(
+            "tables:\nmetrics:\n"
+            "dimensions:\n"
+            "  is_holiday_window:\n"
+            "    derived: true\n"
+            "    description: Is the message within 3 days of a holiday?\n"
+            '    sql: "messages.date BETWEEN holidays.date - INTERVAL 3 DAY AND holidays.date"\n'
+            "    notes: Requires LEFT JOIN to holidays.\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.dimension_notes is not None
+        notes = result.dimension_notes["is_holiday_window"]
+        assert "messages.date BETWEEN holidays.date" in notes
+        assert "SQL:" in notes
+
+    def test_non_derived_dimension_has_no_sql_label(self, tmp_path) -> None:
+        p = tmp_path / "nonderived.yml"
+        p.write_text(
+            "tables:\nmetrics:\n"
+            "dimensions:\n"
+            "  channel:\n"
+            "    description: Email or push channel.\n"
+            "    sql: messages.channel\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.dimension_notes is not None
+        # non-derived dimension should not expose raw SQL expression in notes
+        assert "SQL:" not in (result.dimension_notes.get("channel") or "")
+
+    def test_derived_dimension_without_sql_field_no_crash(self, tmp_path) -> None:
+        p = tmp_path / "derived_nosql.yml"
+        p.write_text(
+            "tables:\nmetrics:\n"
+            "dimensions:\n"
+            "  computed_flag:\n"
+            "    derived: true\n"
+            "    description: Some derived flag with no sql yet.\n"
+        )
+        result = inspect_schema(InspectSchemaInput(), str(p))
+
+        assert result.error is None
+        assert result.dimension_notes is not None
+        assert "computed_flag" in result.dimension_notes
+
+    def test_derived_dimension_sql_on_real_layer(self) -> None:
+        result = inspect_schema(
+            InspectSchemaInput(),
+            "data/semantic_layer_6w.yml",
+        )
+
+        assert result.dimension_notes is not None
+        notes = result.dimension_notes.get("is_holiday_window", "")
+        assert "SQL:" in notes
+        assert "holidays.date" in notes
+
 
 # ---------------------------------------------------------------------------
 # compare_periods behaviour
