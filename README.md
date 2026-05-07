@@ -1,3 +1,14 @@
+---
+title: why-agent
+emoji: 🔍
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 # why-agent — internal working doc
 
 Owners: Mapo, Isa
@@ -420,10 +431,362 @@ uv run streamlit run streamlit_app.py
 
 ---
 
-## 16. Pointers
+## 16. Running Locally (Full Stack)
+
+### Option A: Streamlit UI (recommended for most development)
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+This is the **simplest** way to run. Opens at `http://localhost:8501`. Uses Streamlit's built-in chat interface.
+
+**When to use:** Local development, testing the agent loop, iterating on prompts, demo rehearsal.
+
+### Option B: FastAPI + Next.js (full web stack)
+
+For a more complete web experience, run the FastAPI backend and Next.js frontend in parallel.
+
+**Terminal 1 — FastAPI backend:**
+
+```bash
+uv run fastapi run client/backend/main.py
+```
+
+Backend runs at `http://localhost:8000`. Check health at `http://localhost:8000/api/health`.
+
+**Terminal 2 — Next.js frontend:**
+
+```bash
+cd client/frontend
+npm install  # if not done yet
+npm run dev
+```
+
+Frontend runs at `http://localhost:3000`. Navigate to `http://localhost:3000` to use the full web UI.
+
+### Common development commands
+
+| Task | Command |
+|------|---------|
+| Install/sync deps | `uv sync` |
+| Add dependency | `uv add <package>` (runtime) or `uv add --dev <package>` (dev) |
+| Run all tests | `uv run pytest -v` |
+| Run one test file | `uv run pytest tests/test_agent_smoke.py -v` |
+| Lint & auto-fix | `uv run ruff check --fix` |
+| Format code | `uv run ruff format` |
+| Type check (optional) | `uv run pyright` |
+| Run Streamlit | `uv run streamlit run streamlit_app.py` |
+| Run FastAPI | `uv run fastapi run client/backend/main.py` |
+| Run Next.js dev | `cd client/frontend && npm run dev` |
+| Build Next.js | `cd client/frontend && npm run build` |
+| Build Docker image | `docker build -t why-agent:latest .` |
+
+---
+
+## 17. Development & Testing
+
+### Running tests
+
+```bash
+# All tests
+uv run pytest
+
+# Single file
+uv run pytest tests/test_tools.py -v
+
+# Single test
+uv run pytest tests/test_tools.py::test_inspect_schema -v
+
+# With print output
+uv run pytest -s
+```
+
+Tests are **smoke tests** — we verify that tools run without crashing and return the expected JSON shape. Mocking is minimal.
+
+### Code quality gates (required before commit)
+
+```bash
+uv run ruff check --fix    # Fix lint issues
+uv run ruff format         # Format code
+```
+
+Both must pass before committing. Set up a pre-commit hook to automate:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/bash
+uv run ruff check --fix && uv run ruff format || exit 1
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+### Using the REPL (interactive testing)
+
+```bash
+# Against MiniMax API (requires MINIMAX_API_KEY)
+export MODEL_BACKEND=minimax
+uv run python scripts/repl_graph.py
+# > Q: Why did message open rate drop?
+# > Q: Why does weekend engagement differ?
+
+# Against replay (no API key needed)
+export MODEL_BACKEND=replay
+export REPLAY_SCENARIO_ID=scenario_1
+uv run python scripts/repl_graph.py
+```
+
+---
+
+## 18. Deployment to HF Spaces
+
+why-agent is designed to deploy to Hugging Face Spaces via Docker. The included `Dockerfile` is multi-stage and includes everything: Python agent, FastAPI backend, Next.js frontend, and nginx reverse proxy.
+
+### Quick deploy (3 steps)
+
+**1. Push code to HF Spaces:**
+
+```bash
+# Set up remote once (replace with your Spaces URL)
+git remote add space https://huggingface.co/spaces/YOUR_USERNAME/why-agent.git
+
+# Then push (HF Spaces auto-detects Dockerfile and builds)
+git push space main
+```
+
+**2. Set environment variables in HF Spaces Settings:**
+
+Go to Space Settings > Variables and add:
+
+| Variable | Value |
+|----------|-------|
+| `MODEL_BACKEND` | `replay` (recommended) or `vllm` if you have a GPU endpoint |
+| `MINIMAX_API_KEY` | Only if using `MODEL_BACKEND=minimax` |
+| `VLLM_ENDPOINT` | Only if using `MODEL_BACKEND=vllm` (e.g. `http://vllm-api.example.com:8000/v1`) |
+| `HF_DATASET_ID` | Optional: e.g. `username/why-agent-data` (auto-downloads at boot) |
+
+**3. Verify:**
+
+```bash
+curl https://YOUR_SPACE_URL/api/health
+```
+
+Should return: `{"ok": true}`
+
+### Model backends explained
+
+| Backend | Use case | Cost | Setup |
+|---------|----------|------|-------|
+| **replay** | Demo when GPU offline, pre-recorded scenarios | Free | Set `REPLAY_SCENARIO_ID=scenario_1` |
+| **minimax** | Fallback LLM for ad-hoc questions | ~$0.01/query | Set `MINIMAX_API_KEY` |
+| **vllm** | High-quality, fast inference on GPU | $1.99/hr (AMD MI300X) | Set `VLLM_ENDPOINT` |
+
+### Recording demo scenarios for offline playback
+
+When a scenario works end-to-end, record it:
+
+```bash
+export MODEL_BACKEND=minimax
+export MINIMAX_API_KEY=your-key
+uv run python scripts/record_replay.py --scenario scenario_1
+```
+
+This saves `replays/scenario_1.json`. Commit it and deploy with `MODEL_BACKEND=replay`.
+
+### Docker: build and run locally
+
+```bash
+# Build
+docker build -t why-agent:latest .
+
+# Run
+docker run -p 7860:7860 -e MODEL_BACKEND=replay why-agent:latest
+```
+
+Then visit `http://localhost:7860`.
+
+### Environment variables reference (complete)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_BACKEND` | — | LLM backend: `minimax`, `vllm`, or `replay` |
+| `MINIMAX_API_KEY` | — | MiniMax API key (if using minimax backend) |
+| `VLLM_ENDPOINT` | — | vLLM server URL (if using vllm backend; include `/v1`) |
+| `REPLAY_SCENARIO_ID` | — | Scenario ID for replay mode (filename without `.json`) |
+| `PARQUET_DIR` | `/app/data/parquet` | Path to Parquet dataset directory |
+| `SEMANTIC_LAYER_PATH` | `/app/data/semantic_layer.yml` | Path to semantic layer YAML |
+| `HF_DATASET_ID` | — | HF Dataset ID to auto-download at boot (optional) |
+| `LANGSMITH_API_KEY` | — | LangSmith API key for tracing (optional) |
+
+### Health check endpoints
+
+```bash
+# Health check
+curl http://localhost:7860/api/health
+# Returns: {"ok": true}
+
+# Demo questions
+curl http://localhost:7860/api/demo-questions
+# Returns: {"questions": [...]}
+
+# Investigate (POST)
+curl -X POST http://localhost:7860/api/investigate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Why did open rate drop?"}'
+# Streams Server-Sent Events (SSE)
+```
+
+### Troubleshooting deployment
+
+| Issue | Solution |
+|-------|----------|
+| Build fails with npm error | Ensure Node 20+ installed; run `npm install --legacy-peer-deps` locally |
+| API returns 500 | Check HF Spaces logs; verify `PARQUET_DIR` and `SEMANTIC_LAYER_PATH` exist |
+| vLLM endpoint unreachable | Verify `VLLM_ENDPOINT` includes `/v1`; check GPU server is running |
+| Data not loading | Set `HF_DATASET_ID` to auto-download, or manually COPY Parquet files into Dockerfile |
+| Replay scenario not found | Verify `REPLAY_SCENARIO_ID` matches filename in `replays/` (without `.json`) |
+
+---
+
+## 19. Architecture & Project Structure
+
+```
+why-agent/
+├── agent/                           # Core agent logic
+│   ├── graph.py                     # LangGraph state machine (6-phase loop)
+│   ├── state.py                     # Pydantic InvestigationState model
+│   ├── client.py                    # Multi-backend LLM client
+│   ├── constants.py                 # Named constants (backends, tools, demo questions)
+│   ├── tools/                       # The four tools
+│   │   ├── inspect_schema.py       # Returns table metadata + business context
+│   │   ├── run_sql.py              # Execute read-only DuckDB queries
+│   │   ├── compare_periods.py      # Quantify metric change between windows
+│   │   └── decompose_metric.py     # Slice metric by dimensions, rank anomalies
+│   └── prompts/                     # System + critique prompts (markdown)
+│       ├── system.md
+│       └── critique.md
+│
+├── client/
+│   ├── backend/                     # FastAPI server
+│   │   ├── main.py                 # GET /health, POST /api/investigate
+│   │   ├── deps.py                 # Dependency injection
+│   │   ├── sse.py                  # Server-Sent Events formatting
+│   │   └── tests/
+│   └── frontend/                    # Next.js app (React + TypeScript)
+│       ├── src/app/page.tsx        # Main UI page
+│       ├── src/app/api/investigate # Next.js API route (optional)
+│       └── package.json
+│
+├── data/
+│   ├── parquet/                     # Dataset files (user-provided; gitignored)
+│   ├── semantic_layer.yml           # Business metadata, metrics, dimensions, joins
+│   └── root_cause/                  # Ground-truth documentation
+│
+├── replays/                         # Pre-recorded investigation traces (JSON)
+│   └── scenario_1.json
+│
+├── tests/                           # Python smoke tests
+│   ├── test_tools.py               # Tool execution and output shape
+│   ├── test_client_backends.py     # Verify 3 backends (minimax, vllm, replay)
+│   └── test_agent_smoke.py         # End-to-end agent smoke test
+│
+├── docker/                          # Container config
+│   ├── Dockerfile                  # Multi-stage: Next.js + Python + nginx
+│   ├── entrypoint.sh               # Boot script (handles HF Dataset download)
+│   ├── nginx.conf                  # Reverse proxy (routes / to Next.js, /api/* to FastAPI)
+│   └── supervisord.conf            # Process management (nginx, FastAPI, Next.js)
+│
+├── scripts/                         # Utilities
+│   ├── repl_graph.py               # Interactive REPL for testing the agent
+│   └── record_replay.py            # Save a scenario as replay JSON
+│
+├── streamlit_app.py                # Streamlit UI (standalone, no backend needed)
+├── pyproject.toml                  # Dependencies + test config
+├── Dockerfile                      # Deployment image
+├── .env.example                    # Environment template
+├── CLAUDE.md                       # Implementation decisions & constraints
+├── README.md                       # This file (project overview + business context)
+└── docs/
+    └── why-agent-architecture.png  # Diagram
+```
+
+---
+
+## 20. Coding conventions
+
+Per CLAUDE.md, follow these when writing code:
+
+1. **Sync by default** — DuckDB and Streamlit are sync. Use `async def` only at the LLM boundary.
+2. **Pydantic v2** — All structured data (tool inputs/outputs, state, semantic layer).
+3. **Type annotations** — Required on public functions (args + return type).
+4. **No print()** — Use `logger = logging.getLogger(__name__)` in agent code.
+5. **No magic strings** — Backend names, tool names, scenario IDs go in `agent/constants.py`.
+6. **Tool docstrings for the LLM** — Write them as if the model will read them (be descriptive about what it does and when to use it).
+
+### Example tool implementation
+
+```python
+from pydantic import BaseModel, Field
+import logging
+
+logger = logging.getLogger(__name__)
+
+class MyToolInput(BaseModel):
+    query: str = Field(description="A human-readable query or metric name.")
+
+class MyToolOutput(BaseModel):
+    result: dict
+    error: str | None = None
+
+def my_tool(args: MyToolInput) -> dict:
+    """Use this tool to analyze X. Returns a dict with 'result' (the data) and optional 'error'."""
+    try:
+        result = ...
+        return {"result": result}
+    except Exception as exc:
+        logger.exception("Tool failed for query: %s", args.query)
+        return {"error": str(exc), "hint": "Try phrasing the query differently"}
+```
+
+---
+
+## 21. Locked decisions (do not change without explicit approval)
+
+These decisions are locked per CLAUDE.md. Changing any requires discussion:
+
+| Decision | Value | Why |
+|----------|-------|-----|
+| Architecture | Single agent (not multi-agent) | Simpler to debug, easier to understand agentic fundamentals |
+| Tool count | 4 tools (fixed) | Fewer integrations = fewer demo failure modes |
+| Orchestration | LangGraph (not CrewAI, AutoGen, etc.) | Explicit state machine, good tracing, community support |
+| Model (prod) | Llama-3.3-70B (vLLM) | Open-source, fast on MI300X, no licensing |
+| Model (dev) | MiniMax-M2.7 (API fallback) | No GPU required, quick iteration |
+| Data engine | DuckDB on Parquet | Embedded, column-oriented, single query engine |
+| Semantic layer | Single YAML file (hand-written) | Simple, no tooling overhead, easy to version |
+| UI | Streamlit (primary) + Next.js (secondary) | Free hosting, rapid iteration, good for demos |
+| Hosting | HF Spaces (primary) + Streamlit Cloud (backup) | Free, simple, community-friendly |
+| License | MIT | Open-source, permissive |
+
+If a task seems to require changing one of these, pause and ask before proceeding.
+
+---
+
+## 22. Risks & known limitations
+
+1. **Parquet size** — Keep total Parquet data under 500 MB to fit in HF Spaces' memory limit. Profile on Day 2.
+2. **Investigation latency** — Agent might take 60–120 seconds on a fallback model. Frame demos as "minutes vs hours," not "60 seconds."
+3. **GPU availability** — The MI300X droplet costs $1.99/hr. Use `MODEL_BACKEND=replay` when the GPU is off.
+4. **Concurrent requests** — HF Spaces free tier queues additional requests (no parallelism). For production, use a dedicated server.
+5. **Replay maintenance** — Scenarios must be re-recorded if the agent loop changes significantly.
+
+---
+
+## 23. Resources & links
 
 - AMD Developer Hackathon: https://lablab.ai/ai-hackathons/amd-developer
 - AMD Developer Cloud docs: https://www.amd.com/en/developer/resources/cloud-access/amd-developer-cloud.html
 - LangGraph docs: https://langchain-ai.github.io/langgraph/
 - vLLM on ROCm: https://docs.vllm.ai/en/latest/getting_started/amd-installation.html
 - Streamlit Cloud: https://share.streamlit.io
+- MiniMax API: https://platform.minimaxi.chat/
+- Hugging Face Spaces: https://huggingface.co/spaces

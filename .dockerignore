@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+.env
+.env.*
+data/parquet/
+client/frontend/node_modules/
+client/frontend/.next/

@@ -36,3 +36,8 @@ pyrightconfig.json
 
 # Data
 data/parquet/
+
+# Frontend build artifacts
+client/frontend/.next/
+client/frontend/node_modules/
+client/frontend/out/
