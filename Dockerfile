@@ -33,7 +33,7 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH=/app
 COPY agent/               /app/agent/
 COPY client/backend/      /app/client/backend/
 COPY client/__init__.py   /app/client/__init__.py
-COPY data/semantic_layer.yml /app/data/semantic_layer.yml
+COPY data/semantic_layer_6w.yml /app/data/semantic_layer.yml
 COPY replays/             /app/replays/
 RUN mkdir -p /app/replays
 COPY streamlit_app.py     /app/streamlit_app.py
