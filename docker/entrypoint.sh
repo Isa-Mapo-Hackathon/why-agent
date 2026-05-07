@@ -4,7 +4,7 @@ set -euo pipefail
 # Pull parquet data from HF Dataset at boot if the directory is empty
 if [ -n "${HF_DATASET_ID:-}" ] && [ -z "$(ls -A /app/data/parquet 2>/dev/null)" ]; then
     echo "Fetching parquet from HF Dataset: $HF_DATASET_ID"
-    if timeout 120 /app/.venv/bin/huggingface-cli download \
+    if timeout 120 hf download \
         --repo-type dataset \
         "${HF_DATASET_ID}" \
         --local-dir /app/data/parquet \
