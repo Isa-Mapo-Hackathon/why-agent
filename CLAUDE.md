@@ -294,6 +294,15 @@ Not done if:
 - Don't squash commits into single mega-commits. Atomic changes preferred.
 - Don't open GitHub PRs/issues programmatically unless asked. Draft the PR description and let the human merge.
 
+### Two remotes — different push rules
+
+| Remote | When to push | Command |
+|--------|-------------|---------|
+| `origin` (GitHub) | Every commit, always | `git push origin <branch>` |
+| `space` (HF Spaces) | **Only when opening a PR** — not on every commit | `git push space <branch>:main --force` |
+
+**Never push to `space` during normal development.** Only push to `space` when the branch is ready for demo/review and a PR is being created. HF Spaces triggers a full Docker rebuild on every push — reserve it for intentional deploys.
+
 When you finish a task, your reply should include:
 1. What you changed (1-2 sentences)
 2. Files touched

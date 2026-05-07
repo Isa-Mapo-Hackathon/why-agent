@@ -162,6 +162,7 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
             args = tc.args
             tool_name = tc.tool_name
             output: dict = {}
+            _t0 = datetime.now(UTC)
             try:
                 if tool_name == "inspect_schema":
                     from agent.tools.inspect_schema import inspect_schema as _fn
@@ -210,6 +211,7 @@ def execute_tools(state: InvestigationState) -> InvestigationState:
                 output=output,
                 timestamp=_iso_now(),
                 reasoning=batch_reasoning,
+                duration_ms=(datetime.now(UTC) - _t0).total_seconds() * 1000,
             )
             batch_reasoning = None  # only attach to the first call in the batch
             state.add_evidence(entry)

@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html { height: 100%; }
+
+body {
+  font-family: var(--font-display), system-ui, sans-serif;
+  background-color: #0d0b14;
+  background-image:
+    radial-gradient(ellipse 55% 35% at 10% 0%,  rgba(109,40,217,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 45% 35% at 90% 100%, rgba(88,28,135,0.12)  0%, transparent 60%);
+  color: #ffffff;
+  min-height: 100%;
+}
+
+::-webkit-scrollbar       { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3b2d5c; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #6d28d9; }
+
+::selection { background: rgba(139,92,246,0.3); }
+
+code, pre { font-family: var(--font-mono), monospace; }
+
+/* ── Report body ── */
+.report-body h1 {
+  font-size: 1.5rem; font-weight: 700; color: #fff;
+  margin-top: 1.75rem; margin-bottom: 0.75rem;
+  padding-bottom: 0.6rem; border-bottom: 1px solid #3b2d5c;
+  letter-spacing: -0.015em;
+}
+.report-body h2 {
+  font-size: 1.2rem; font-weight: 600; color: #fff;
+  margin-top: 1.5rem; margin-bottom: 0.5rem;
+}
+.report-body h3 {
+  font-size: 1rem; font-weight: 600; color: #c4b5fd;
+  margin-top: 1.25rem; margin-bottom: 0.4rem;
+}
+.report-body p  { color: #e2d9f3; line-height: 1.8; margin-bottom: 0.85rem; font-size: 0.875rem; }
+.report-body ul,
+.report-body ol { color: #e2d9f3; padding-left: 1.25rem; margin-bottom: 0.85rem; }
+.report-body li { margin-bottom: 0.35rem; line-height: 1.75; font-size: 0.875rem; }
+.report-body strong { color: #fff; font-weight: 600; }
+.report-body hr { border-color: #3b2d5c; margin: 1.25rem 0; }
+.report-body code {
+  font-family: var(--font-mono), monospace;
+  color: #c4b5fd; background: rgba(139,92,246,0.15);
+  padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.8rem;
+}
+.report-body blockquote {
+  border-left: 2px solid #7c3aed;
+  padding-left: 1rem; color: #a78bfa; font-style: italic; margin: 1rem 0;
+}

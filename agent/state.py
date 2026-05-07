@@ -37,6 +37,9 @@ class EvidenceEntry(BaseModel):
     reasoning: str | None = Field(
         default=None, description="LLM reasoning text that preceded this tool call."
     )
+    duration_ms: float | None = Field(
+        default=None, description="Tool execution time in milliseconds."
+    )
 
 
 # ---------------------------------------------------------------------------
