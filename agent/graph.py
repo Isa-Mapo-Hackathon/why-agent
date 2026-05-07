@@ -36,7 +36,7 @@ from agent.tools.schemas import (
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 MAX_TOOL_CALLS = 50  # hard cap across all phases — prevents infinite tool-call loops
 
 

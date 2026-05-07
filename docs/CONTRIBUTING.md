@@ -59,24 +59,21 @@ Opens at `http://localhost:8501`. Uses the Streamlit UI to ask questions directl
 
 ### Option B: FastAPI + Next.js (full stack)
 
-**Terminal 1 — FastAPI backend:**
+**Terminal 1 — FastAPI backend (with hot reload):**
 ```bash
-cd /home/ysh/dev/why-agent
-uv run fastapi run client/backend/main.py
+uv run uvicorn client.backend.main:app --reload --port 8000
 ```
 
 Backend runs at `http://localhost:8000`. Check health at `http://localhost:8000/api/health`.
 
 **Terminal 2 — Next.js frontend:**
 ```bash
-cd /home/ysh/dev/why-agent/client/frontend
-npm install  # if not done yet
+cd client/frontend
+npm install  # first time only
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`.
-
-Navigate to `http://localhost:3000` to see the full Next.js interface.
+Frontend runs at `http://localhost:3000`. The Next.js dev server proxies `/api/*` to the FastAPI backend on port 8000 automatically.
 
 ---
 
@@ -92,8 +89,8 @@ Navigate to `http://localhost:3000` to see the full Next.js interface.
 | **Format code** | `uv run ruff format` |
 | **Type check** (optional) | `uv run pyright` |
 | **Run Streamlit** | `uv run streamlit run streamlit_app.py` |
-| **Run FastAPI** | `uv run fastapi run client/backend/main.py` |
-| **Run Next.js dev** | `cd client/frontend && npm run dev` |
+| **Run FastAPI backend** | `uv run uvicorn client.backend.main:app --reload --port 8000` |
+| **Run Next.js frontend** | `cd client/frontend && npm run dev` |
 
 ---
 
