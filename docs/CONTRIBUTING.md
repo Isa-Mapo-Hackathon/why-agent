@@ -323,10 +323,29 @@ def my_tool(args: MyToolInput) -> dict:
 
 ## Deployment
 
+### Remote push rules
+
+The repo has two git remotes with different push policies:
+
+| Remote | Purpose | When to push |
+|--------|---------|-------------|
+| `origin` (GitHub) | Source of truth, PRs, CI | Every commit — always push here |
+| `space` (HF Spaces) | Deployment target | **Only when opening a PR** |
+
+```bash
+# Normal dev — push to GitHub only
+git push origin feat/my-feature
+
+# Deploy to HF Spaces — only when PR is ready
+git push space feat/my-feature:main --force
+```
+
+HF Spaces triggers a full Docker rebuild on every push. **Do not push to `space` during iteration** — only when the branch is ready for demo/review and a PR is being opened.
+
 See [`docs/RUNBOOK.md`](./RUNBOOK.md) for:
-- How to deploy to Hugging Face Spaces
+- Full HF Spaces deployment procedure
 - Environment variables for production
-- Docker build and push
+- Docker build and troubleshooting
 - Health check and monitoring
 
 ---
