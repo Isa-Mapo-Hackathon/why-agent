@@ -35,6 +35,7 @@ Then edit `.env` with your secrets:
 - `MODEL_BACKEND` — use `minimax` or `replay` for local development
 - `MINIMAX_API_KEY` — get from [MiniMax dashboard](https://platform.minimaxi.chat/)
 - `PARQUET_DIR` — defaults to `data/parquet`
+- `SEMANTIC_LAYER_PATH` — defaults to `data/semantic_layer.yml`
 
 ### 3. Verify setup
 
@@ -323,6 +324,17 @@ def my_tool(args: MyToolInput) -> dict:
 
 ## Deployment
 
+### Local Docker build
+
+To test the full stack locally (frontend + backend + agent) in a container:
+
+```bash
+docker build -t why-agent:latest .
+docker run -p 7860:7860 -e MODEL_BACKEND=replay why-agent:latest
+```
+
+Then open `http://localhost:7860`.
+
 ### Remote push rules
 
 The repo has two git remotes with different push policies:
@@ -342,11 +354,267 @@ git push space feat/my-feature:main --force
 
 HF Spaces triggers a full Docker rebuild on every push. **Do not push to `space` during iteration** — only when the branch is ready for demo/review and a PR is being opened.
 
-See [`docs/RUNBOOK.md`](./RUNBOOK.md) for:
-- Full HF Spaces deployment procedure
-- Environment variables for production
-- Docker build and troubleshooting
-- Health check and monitoring
+### HF Spaces environment variables
+
+When deploying to HF Spaces, set these secrets in the Space settings:
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `MODEL_BACKEND` | `replay` or `minimax` | LLM backend; use `replay` to avoid API costs |
+| `MINIMAX_API_KEY` | (API key) | Required only if `MODEL_BACKEND=minimax` |
+| `HF_DATASET_ID` | (optional) | Dataset repo ID to auto-download Parquet files on boot |
+| `PARQUET_DIR` | `/app/data/parquet` | Path inside container (do not change) |
+| `SEMANTIC_LAYER_PATH` | `/app/data/semantic_layer.yml` | Path inside container (do not change) |
+
+**Note:** Paths in the container must use `/app/` prefix, not relative paths.
+
+### HF Spaces deployment procedure
+
+#### Quick start
+
+1. **Create a new Space** on [huggingface.co/spaces](https://huggingface.co/spaces):
+   - Owner: your username
+   - Space name: `why-agent` (or any name)
+   - License: MIT
+   - Docker template (or blank)
+
+2. **Link the repo**:
+   ```bash
+   cd /path/to/why-agent
+   git remote add space https://huggingface.co/spaces/{username}/{space-name}
+   ```
+
+3. **Push to deploy** (only when ready):
+   ```bash
+   git push space feat/my-feature:main --force
+   ```
+
+4. **Set secrets** in the Space UI → Settings → Repository secrets:
+   - `MINIMAX_API_KEY` (if using MiniMax backend)
+   - `HF_DATASET_ID` (optional; see below)
+
+#### How the build works
+
+1. HF Spaces detects the `Dockerfile` in the repo root
+2. Builds the image (takes ~5–10 minutes the first time)
+3. Runs the container on port 7860
+4. The `entrypoint.sh` script starts nginx, backend, and frontend via supervisord
+
+#### Auto-downloading Parquet data
+
+If you set `HF_DATASET_ID=ysh99226/why-agent-data`, the entrypoint will:
+1. Check if `/app/data/parquet` is empty
+2. Run `hf download` to fetch the dataset
+3. Timeout after 120 seconds and fall back to `MODEL_BACKEND=replay`
+
+The `hf` command (from `huggingface-hub` package) replaces the deprecated `huggingface-cli`.
+
+#### Git workflow for deployment
+
+**Do NOT push to HF Spaces during development.**
+
+1. **Work on a feature branch:**
+   ```bash
+   git checkout -b feat/my-feature
+   git push origin feat/my-feature
+   ```
+
+2. **Open a PR on GitHub** when ready.
+
+3. **Deploy to HF Spaces only when the PR is ready to demo:**
+   ```bash
+   git push space main:main --force
+   ```
+
+   Or, if the feature branch is the one being demoed (before merge):
+   ```bash
+   git push space feat/my-feature:main --force
+   ```
+
+**Why `--force`?** HF Spaces doesn't have a traditional git history. Using `--force` ensures the Space always reflects the exact commit you push, even if the branch history differs from the origin.
+
+---
+
+## Docker build errors & fixes
+
+### "replays/ directory not found" or "missing JSON files"
+
+**Cause:** The Dockerfile expects `replays/` to exist and contain at least one `.json` file for `MODEL_BACKEND=replay` to work.
+
+**Fix:**
+```bash
+# Create dummy replay if needed
+mkdir -p replays
+echo '{"scenario": "demo"}' > replays/demo.json
+git add replays/demo.json
+git commit -m "chore: add demo replay"
+```
+
+Then rebuild the Docker image.
+
+### "SEMANTIC_LAYER_PATH not found" or "semantic_layer.yml missing"
+
+**Cause:** The Dockerfile copies `data/semantic_layer_6w.yml` but the file doesn't exist.
+
+**Fix:**
+```bash
+# Check the actual filename
+ls -la data/semantic_layer*
+
+# If using a different name, update the Dockerfile COPY line
+COPY data/semantic_layer_6w.yml /app/data/semantic_layer.yml
+```
+
+Or, if you're using a different semantic layer file:
+```dockerfile
+COPY data/YOUR_SEMANTIC_LAYER.yml /app/data/semantic_layer.yml
+```
+
+### "supervisord can't find environment variables" or "MODEL_BACKEND not set in child processes"
+
+**Cause:** Environment variables set in `ENV` commands are not automatically passed to supervisord child processes.
+
+**Fix:** The `docker/supervisord.conf` must explicitly read env vars via `environment=` lines:
+
+```ini
+[program:backend]
+command=/app/.venv/bin/uvicorn ...
+environment=PYTHONUNBUFFERED="1",MODEL_BACKEND="replay"
+```
+
+Or pass them in the command itself. Rebuild the image after fixing `supervisord.conf`.
+
+### "huggingface-cli: command not found"
+
+**Cause:** The old `huggingface-cli` tool is deprecated. The project uses the newer `hf` command from `huggingface-hub` package.
+
+**Fix:** The Dockerfile includes `huggingface-hub` in `pyproject.toml`. The `entrypoint.sh` script uses `hf download`, which is the correct command.
+
+If the entrypoint still fails:
+```bash
+# Verify hf is installed
+docker run -it why-agent:latest /app/.venv/bin/hf --version
+
+# If missing, add to pyproject.toml
+uv add huggingface-hub
+```
+
+### "next: command not found" or "Node.js frontend doesn't start"
+
+**Cause:** The Next.js build failed, or the `server.js` file is missing.
+
+**Fix:**
+1. Check the build log for `npm run build` errors
+2. Ensure `client/frontend/package.json` exists and has a valid build script
+3. Rebuild the Docker image:
+   ```bash
+   docker build --no-cache -t why-agent:latest .
+   ```
+
+### "nginx bind: address already in use"
+
+**Cause:** Port 7860 or 80 is already bound on your machine.
+
+**Fix (local testing):**
+```bash
+docker run -p 8080:7860 -e MODEL_BACKEND=replay why-agent:latest
+# Now visit http://localhost:8080
+```
+
+On HF Spaces, port 7860 is reserved and managed by the platform — no action needed.
+
+### "ModuleNotFoundError: No module named 'agent'"
+
+**Cause:** The Python path is not set correctly in the container.
+
+**Fix:** The Dockerfile sets `ENV PYTHONPATH=/app`, which should work. If it doesn't:
+1. Verify `COPY agent/ /app/agent/` in the Dockerfile
+2. Check that the `backend` program in supervisord uses the full venv path: `/app/.venv/bin/uvicorn`
+
+### "API route returns 404" or "Frontend can't reach backend"
+
+**Cause:** nginx is not configured to reverse-proxy to the backend on 127.0.0.1:8000.
+
+**Fix:** Check `docker/nginx.conf`:
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header X-Real-IP $remote_addr;
+    ...
+}
+```
+
+Rebuild after fixing the config:
+```bash
+docker build --no-cache -t why-agent:latest .
+```
+
+---
+
+## Health check & monitoring
+
+### Verify all services are running
+
+```bash
+# Inside the container or from host
+curl http://localhost:7860/api/health
+# Expected: {"ok":true}
+
+curl http://localhost:7860/
+# Expected: HTML (Next.js frontend)
+
+curl -X POST http://localhost:7860/api/investigate \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Why did revenue go up?"}'
+# Expected: Server-Sent Event stream
+```
+
+### Check logs in HF Spaces
+
+Click "Logs" in the top right of the Space UI. The logs show:
+- nginx startup
+- backend startup (uvicorn)
+- frontend startup (Node.js)
+- Any errors from the agent or tools
+
+### Common troubleshooting flows
+
+**The frontend loads but the backend is down:**
+1. Check Space logs (UI → Logs)
+2. Verify `PYTHONPATH=/app` is set in the Dockerfile
+3. Verify `supervisord.conf` has the correct backend command
+4. Rebuild without cache and push:
+   ```bash
+   git push space feat/my-feature:main --force
+   ```
+
+**The API returns 500 errors but logs show nothing:**
+1. The agent code may have an unhandled exception
+2. Check the agent's error handling in `agent/graph.py`
+3. Verify the semantic layer file exists at `/app/data/semantic_layer.yml`
+4. Test locally:
+   ```bash
+   docker run -e MODEL_BACKEND=replay why-agent:latest
+   curl http://localhost:7860/api/health
+   ```
+
+**Parquet data auto-download timed out, but I want to retry:**
+The entrypoint waits 120 seconds for the HF dataset download, then falls back to `MODEL_BACKEND=replay`. If you want a fresh download:
+1. Manually clear the parquet directory in the Space (if you have SSH access)
+2. Or, restart the Space (UI → Settings → Restart)
+3. The entrypoint will retry on next boot
+
+**I pushed to the Space but the changes didn't appear:**
+1. Verify you pushed to the correct branch (should push `*:main`):
+   ```bash
+   git push space feat/my-feature:main --force
+   ```
+
+2. HF Spaces can take 5–10 minutes to rebuild. Wait and refresh after 2 minutes.
+
+3. If the Space still doesn't update:
+   - Click "Restart" in the Space UI
+   - Or delete and recreate the Space
 
 ---
 
@@ -369,4 +637,4 @@ If you find a bug or have a feature request:
 
 ---
 
-Last updated: 2025-05-06
+Last updated: 2026-05-07
