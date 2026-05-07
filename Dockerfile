@@ -41,7 +41,8 @@ COPY streamlit_app.py     /app/streamlit_app.py
 # Next.js standalone runtime + static assets
 COPY --from=frontend-builder /app/.next/standalone/   /app/client/frontend/
 COPY --from=frontend-builder /app/.next/static        /app/client/frontend/.next/static
-COPY --from=frontend-builder /app/public              /app/client/frontend/public
+RUN mkdir -p /app/client/frontend/public
+COPY --from=frontend-builder /app/public/             /app/client/frontend/public/
 
 # Config
 COPY docker/nginx.conf       /etc/nginx/nginx.conf
