@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from agent.graph import MAX_RETRIES, build_graph, critique
+from agent.graph import MAX_RETRIES, build_graph, critique, report
 from agent.prompts import _render_system
 from agent.state import (
     EvidenceEntry,
@@ -166,6 +166,17 @@ def _blank_state() -> InvestigationState:
 
 
 class TestCritiqueNode:
+    def test_sets_phase_to_critique(self):
+        state = _blank_state()
+        state.phase = Phase.CROSS_CHECK
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "VERDICT: strong\nEvidence is conclusive."
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.phase == Phase.CRITIQUE
+
     def test_strong_verdict_sets_passed_and_clears_feedback(self):
         state = _blank_state()
         state.critique_feedback = "stale feedback from prior pass"
@@ -265,3 +276,16 @@ class TestCritiqueNode:
         assert "VERDICT" not in result.critique_feedback
         assert "Line one" in result.critique_feedback
         assert "Line two" in result.critique_feedback
+
+
+class TestReportNode:
+    def test_sets_phase_to_report(self):
+        state = _blank_state()
+        state.phase = Phase.CRITIQUE
+        state.critique_passed = True
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("Final report.")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = report(state)
+        assert result.phase == Phase.REPORT
+        assert result.final_report is not None

@@ -115,7 +115,7 @@ function OutputPreview({ toolName, output }: { toolName: string; output: Record<
 
 function EvidenceRow({ item, index, isLatest, streaming }: { item: EvidenceItem; index: number; isLatest: boolean; streaming: boolean }) {
   const hasError = Boolean(item.output?.error);
-  const [open, setOpen] = useState(hasError || (isLatest && streaming));
+  const [open, setOpen] = useState(hasError);
 
   return (
     <div className={`border rounded-lg ${

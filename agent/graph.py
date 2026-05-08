@@ -295,6 +295,7 @@ def _make_phase_node(phase: Phase):
 
 def critique(state: InvestigationState) -> InvestigationState:
     """Ask the LLM to evaluate evidence strength; decide loop or report."""
+    state.phase = Phase.CRITIQUE
     critique_prompt = _render_critique(
         user_question=state.user_question,
         hypotheses=_format_hypotheses(state.hypotheses),
@@ -341,6 +342,7 @@ def critique(state: InvestigationState) -> InvestigationState:
 
 def report(state: InvestigationState) -> InvestigationState:
     """Assemble and store the final report dict."""
+    state.phase = Phase.REPORT
     report_prompt = (
     f"You are writing the final report for an investigation.\n\n"
     f"**User question:** {state.user_question}\n\n"

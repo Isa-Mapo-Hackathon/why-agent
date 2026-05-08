@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatEntry, EvidenceItem, Phase, ReportData } from "@/lib/types";
 import { runInvestigation } from "@/lib/sseClient";
 import ChatInput from "@/components/ChatInput";
@@ -29,28 +29,47 @@ export default function Home() {
   const [history, setHistory] = useState<ChatEntry[]>([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [history]);
 
   const submit = async (question: string) => {
     if (streaming) return;
-    setHistory((h) => [newEntry(question), ...h]);
+    setHistory((h) => [...h, newEntry(question)]);
     setStreaming(true);
     abortRef.current = new AbortController();
     try {
       await runInvestigation(question, (evt) => {
         setHistory((h) => {
-          const [cur, ...rest] = h;
+          const cur = h[h.length - 1];
+          if (!cur) return h;
           const u = { ...cur };
           if (evt.type === "phase") u.phases = [...new Set([...u.phases, evt.phase as Phase])];
           else if (evt.type === "evidence") { const { type: _, ...item } = evt; u.evidence = [...u.evidence, item as EvidenceItem]; }
-          else if (evt.type === "report") { const { type: _, ...r } = evt; u.report = r as ReportData; u.streaming = false; u.elapsedMs = Date.now() - cur.startedAt; }
+          else if (evt.type === "report") {
+            const { type: _, ...r } = evt;
+            u.phases = [...new Set([...u.phases, "critique", "report"])] as Phase[];
+            u.report = r as ReportData;
+            u.streaming = false;
+            u.elapsedMs = Date.now() - cur.startedAt;
+          }
           else if (evt.type === "error") { u.error = evt.message; u.streaming = false; u.elapsedMs = Date.now() - cur.startedAt; }
           else if (evt.type === "done") { u.streaming = false; u.elapsedMs = Date.now() - cur.startedAt; }
-          return [u, ...rest];
+          return [...h.slice(0, -1), u];
         });
       }, abortRef.current.signal);
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        setHistory((h) => { const [cur, ...rest] = h; return [{ ...cur, error: String(err), streaming: false, elapsedMs: Date.now() - cur.startedAt }, ...rest]; });
+        setHistory((h) => {
+          const cur = h[h.length - 1];
+          if (!cur) return h;
+          return [
+            ...h.slice(0, -1),
+            { ...cur, error: String(err), streaming: false, elapsedMs: Date.now() - cur.startedAt },
+          ];
+        });
       }
     } finally { setStreaming(false); }
   };
@@ -90,7 +109,7 @@ export default function Home() {
           )}
 
           {history.map((entry, i) => (
-            <div key={i} className="space-y-4">
+            <div key={`${entry.startedAt}-${i}`} className="space-y-4">
 
               {/* User message */}
               <div className="flex justify-end">
@@ -130,6 +149,7 @@ export default function Home() {
 
             </div>
           ))}
+          <div ref={scrollRef} />
         </div>
 
         <div className="border-t border-frame bg-bg px-6 py-4">
