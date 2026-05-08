@@ -181,8 +181,16 @@ Canonical commands. If you need to run the project, this is what to type — don
 # Install / sync deps
 uv sync
 
-# Run the Streamlit app (the demo entrypoint)
-uv run streamlit run streamlit_app.py
+# --- Run the app (default: FastAPI backend + Next.js frontend) ---
+
+# Terminal 1 — FastAPI backend (http://localhost:8000)
+uv run uvicorn client.backend.main:app --reload --port 8000
+
+# Terminal 2 — Next.js frontend (http://localhost:3000)
+cd client/frontend && npm install && npm run dev
+
+# --- Alternative: Streamlit UI (simpler, single terminal) ---
+uv run streamlit run streamlit_app.py   # http://localhost:8501
 
 # Run all tests
 uv run pytest
