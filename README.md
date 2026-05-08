@@ -414,7 +414,11 @@ uv run python scripts/repl_graph.py
 # Lint + format (must be clean before any commit)
 uv run ruff check --fix && uv run ruff format
 
-# Run Streamlit app
+# Run the app — FastAPI backend + Next.js frontend (default)
+uv run uvicorn client.backend.main:app --reload --port 8000  # Terminal 1
+cd client/frontend && npm run dev                             # Terminal 2
+
+# Alternative: Streamlit (single terminal)
 uv run streamlit run streamlit_app.py
 ```
 
@@ -433,24 +437,12 @@ uv run streamlit run streamlit_app.py
 
 ## 16. Running Locally (Full Stack)
 
-### Option A: Streamlit UI (recommended for most development)
-
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-This is the **simplest** way to run. Opens at `http://localhost:8501`. Uses Streamlit's built-in chat interface.
-
-**When to use:** Local development, testing the agent loop, iterating on prompts, demo rehearsal.
-
-### Option B: FastAPI + Next.js (full web stack)
-
-For a more complete web experience, run the FastAPI backend and Next.js frontend in parallel.
+### Default: FastAPI + Next.js
 
 **Terminal 1 — FastAPI backend:**
 
 ```bash
-uv run fastapi run client/backend/main.py
+uv run uvicorn client.backend.main:app --reload --port 8000
 ```
 
 Backend runs at `http://localhost:8000`. Check health at `http://localhost:8000/api/health`.
@@ -459,11 +451,21 @@ Backend runs at `http://localhost:8000`. Check health at `http://localhost:8000/
 
 ```bash
 cd client/frontend
-npm install  # if not done yet
+npm install  # first time only
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`. Navigate to `http://localhost:3000` to use the full web UI.
+Frontend runs at `http://localhost:3000`.
+
+### Alternative: Streamlit UI
+
+Single terminal, no frontend setup needed. Use this for quick iteration on the agent loop.
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+Opens at `http://localhost:8501`.
 
 ### Common development commands
 
@@ -476,9 +478,9 @@ Frontend runs at `http://localhost:3000`. Navigate to `http://localhost:3000` to
 | Lint & auto-fix | `uv run ruff check --fix` |
 | Format code | `uv run ruff format` |
 | Type check (optional) | `uv run pyright` |
-| Run Streamlit | `uv run streamlit run streamlit_app.py` |
-| Run FastAPI | `uv run fastapi run client/backend/main.py` |
-| Run Next.js dev | `cd client/frontend && npm run dev` |
+| Run FastAPI backend | `uv run uvicorn client.backend.main:app --reload --port 8000` |
+| Run Next.js frontend | `cd client/frontend && npm run dev` |
+| Run Streamlit (alt) | `uv run streamlit run streamlit_app.py` |
 | Build Next.js | `cd client/frontend && npm run build` |
 | Build Docker image | `docker build -t why-agent:latest .` |
 

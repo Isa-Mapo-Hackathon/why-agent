@@ -49,7 +49,9 @@ docker run -d \
   --dtype bfloat16 \
   --max-model-len 32768 \
   --gpu-memory-utilization 0.90 \
-  --trust-remote-code
+  --trust-remote-code \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
 
 echo "==> Container started. Waiting for server to be ready (model download + load)..."
 
