@@ -18,18 +18,7 @@ Evaluate whether the evidence collected is sufficient to answer the user's
 question with reasonable confidence. Be pragmatic — the goal is a useful
 answer, not a perfect one.
 
-### Required checks (must pass for VERDICT: strong)
-
-1. **Headline numbers exist.** Both sides of any comparison must have been
-   measured (A and B, before and after). If either side is missing, return weak.
-
-2. **The leading hypothesis is supported by at least one direct data point.**
-   The conclusion should be grounded in something observed in the data, not
-   pure inference.
-
-3. **At least one alternative explanation was considered.** It doesn't need
-   to be exhaustively ruled out — acknowledging it and providing a reason to
-   favour the leading hypothesis is sufficient.
+{question_type_checks}
 
 ### Advisory checks (bonus credit, not required)
 
