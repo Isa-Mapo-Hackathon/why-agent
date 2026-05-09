@@ -148,10 +148,8 @@ export default function Home() {
           </span>
         </div>
         <div className="px-5 py-2.5 border-t border-frame">
-          <p className="text-[10px] font-mono text-violet-700 leading-relaxed">
-            Powered by AMD GPU Droplet
-            <br />
-            &amp; Qwen3-30B-A3B
+          <p className="text-[10px] font-mono text-violet-700">
+            Powered by AMD GPU Droplet &amp; Qwen3-30B-A3B
           </p>
         </div>
       </ResizableSidebar>
