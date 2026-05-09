@@ -49,6 +49,12 @@ export default function Home() {
     scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [history]);
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   const submit = async (question: string) => {
     if (streaming) return;
     setHistory((h) => [...h, newEntry(question)]);
@@ -89,22 +95,22 @@ export default function Home() {
         abortRef.current.signal,
       );
     } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        setHistory((h) => {
-          const cur = h[h.length - 1];
-          if (!cur) return h;
-          return [
-            ...h.slice(0, -1),
-            {
-              ...cur,
-              error: String(err),
-              streaming: false,
-              elapsedMs: Date.now() - cur.startedAt,
-            },
-          ];
-        });
-      }
+      const wasAborted = (err as Error).name === "AbortError";
+      setHistory((h) => {
+        const cur = h[h.length - 1];
+        if (!cur) return h;
+        return [
+          ...h.slice(0, -1),
+          {
+            ...cur,
+            error: wasAborted ? null : String(err),
+            streaming: false,
+            elapsedMs: Date.now() - cur.startedAt,
+          },
+        ];
+      });
     } finally {
+      abortRef.current = null;
       setStreaming(false);
     }
   };
@@ -232,7 +238,11 @@ export default function Home() {
         </div>
 
         <div className="border-t border-frame bg-bg px-6 py-4">
-          <ChatInput onSubmit={submit} disabled={streaming} />
+          <ChatInput
+            onSubmit={submit}
+            onAbort={() => abortRef.current?.abort()}
+            disabled={streaming}
+          />
         </div>
       </main>
     </div>
