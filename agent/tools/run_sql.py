@@ -45,6 +45,26 @@ def build_connection(parquet_dir: str | None = None) -> duckdb.DuckDBPyConnectio
     return conn
 
 
+def _strip_leading_sql_comments(query: str) -> str:
+    """Remove leading SQL comments before validating the first executable token."""
+    stripped = query.lstrip()
+    while stripped:
+        if stripped.startswith("--"):
+            newline = stripped.find("\n")
+            if newline == -1:
+                return ""
+            stripped = stripped[newline + 1 :].lstrip()
+            continue
+        if stripped.startswith("/*"):
+            end = stripped.find("*/", 2)
+            if end == -1:
+                return ""
+            stripped = stripped[end + 2 :].lstrip()
+            continue
+        return stripped
+    return stripped
+
+
 def _is_readonly(query: str) -> bool:
     """True only when the query is a bare SELECT or a WITH … SELECT (CTE).
 
@@ -52,10 +72,10 @@ def _is_readonly(query: str) -> bool:
     and they would allow multi-statement injection even though DuckDB only
     executes the first statement in a single .execute() call.
     """
-    stripped = query.strip()
+    stripped = _strip_leading_sql_comments(query)
     if not stripped:
         return False
-    if ";" in query:
+    if ";" in stripped:
         return False
     first_token = stripped.split()[0].upper()
     return first_token in {"SELECT", "WITH"}

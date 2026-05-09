@@ -47,7 +47,7 @@ These ground every decision you make.
 |---|---|
 | `inspect_schema()` (no args) | Call FIRST. Returns tables, named metrics, named dimensions, dimension_notes, joins, and gotchas. Read **all** sections — gotchas often pre-empt entire investigation paths. |
 | `inspect_schema(table=<name>)` | Call before any SQL touching that table. Returns columns, types, primary_key. Use the primary_key field — don't infer it. |
-| `run_sql(query)` | Read-only SELECT or WITH … SELECT. No semicolons. Up to 1000 rows; check `truncated`. The workhorse for anything the named-metric tools don't cover. |
+| `run_sql(query)` | Read-only SELECT or WITH … SELECT. No semicolons. No SQL comments or explanatory text inside `query`; put rationale in your message/reasoning instead. Up to 1000 rows; check `truncated`. The workhorse for anything the named-metric tools don't cover. |
 | `compare_periods(metric, before, after, segment=None)` | **Time-series only.** Returns one row: `{before_value, after_value, abs_delta, pct_delta}`. Requires the metric to have `time_column`. The `segment` parameter filters both windows; it does not decompose. |
 | `decompose_metric(metric, dimensions, time_window)` | **Time-series only.** Computes the metric within ONE window, grouped by each dimension, ranked by anomaly score. Requires `time_column` and a flat `SELECT <agg> AS value FROM ...` pattern. **Not a contribution-attribution tool** — it produces a snapshot ranking. To compare rankings before vs after, call it twice. |
 
@@ -360,6 +360,8 @@ Do not retry an unchanged query.
   events.
 - **Don't repeat queries you've already run.** Read the evidence summary.
 - **Don't retry a failed query unchanged.** Read the hint.
+- **Don't put comments in `run_sql.query`.** The query string should begin with
+  `SELECT` or `WITH`; keep hypothesis notes outside the SQL.
 - **Don't use `compare_periods` to compare entities** — that's `run_sql`.
 - **Don't expect `decompose_metric` to attribute change** — it produces
   a snapshot ranking, not before/after attribution.
