@@ -4,9 +4,8 @@ import { useState } from "react";
 
 const QUESTIONS = [
   "Why did campaign 230 underperform campaign 150?",
-  "Why did message open rate drop in the most recent campaign?",
-  "Why does campaign 361 convert 60x better than campaign 296?",
-  "Why is weekend engagement consistently lower than weekday?",
+  "Why did many email conversions happen within a minute of send?",
+  "Why did campaign 361 convert 60x better than campaign 296?"
 ];
 
 interface Props { onSelect: (q: string) => void; disabled: boolean; }
