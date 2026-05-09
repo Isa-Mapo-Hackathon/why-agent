@@ -20,6 +20,7 @@ function newEntry(question: string): ChatEntry {
     report: null,
     error: null,
     streaming: true,
+    interrupted: false,
     startedAt: Date.now(),
     elapsedMs: 0,
   };
@@ -95,7 +96,7 @@ export default function Home() {
         abortRef.current.signal,
       );
     } catch (err) {
-      const wasAborted = (err as Error).name === "AbortError";
+      const wasAborted = err instanceof Error && err.name === "AbortError";
       setHistory((h) => {
         const cur = h[h.length - 1];
         if (!cur) return h;
@@ -105,6 +106,7 @@ export default function Home() {
             ...cur,
             error: wasAborted ? null : String(err),
             streaming: false,
+            interrupted: wasAborted,
             elapsedMs: Date.now() - cur.startedAt,
           },
         ];
@@ -186,7 +188,17 @@ export default function Home() {
               {/* Agent card */}
               <div className="max-w-4xl border border-frame rounded-2xl rounded-tl-sm overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 bg-surface border-b border-frame">
-                  <div className="flex items-center gap-2.5">
+                  <div
+                    className="flex items-center gap-2.5"
+                    role="status"
+                    aria-label={
+                      entry.streaming
+                        ? "Investigating"
+                        : entry.interrupted
+                          ? "Interrupted"
+                          : "Complete"
+                    }
+                  >
                     {entry.streaming ? (
                       <>
                         <ThinkingDots />
@@ -194,9 +206,22 @@ export default function Home() {
                           Investigating
                         </span>
                       </>
+                    ) : entry.interrupted ? (
+                      <>
+                        <div
+                          aria-hidden="true"
+                          className="w-2 h-2 rounded-full bg-violet-800"
+                        />
+                        <span className="text-xs font-mono text-violet-500 uppercase tracking-widest">
+                          Interrupted
+                        </span>
+                      </>
                     ) : (
                       <>
-                        <div className="w-2 h-2 rounded-full bg-violet-500" />
+                        <div
+                          aria-hidden="true"
+                          className="w-2 h-2 rounded-full bg-violet-500"
+                        />
                         <span className="text-xs font-mono text-violet-300 uppercase tracking-widest">
                           Complete
                         </span>

@@ -57,6 +57,7 @@ export interface ChatEntry {
   report: ReportData | null;
   error: string | null;
   streaming: boolean;
+  interrupted: boolean;
   startedAt: number;
   elapsedMs: number;
 }
