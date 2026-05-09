@@ -261,6 +261,18 @@ def llm_call(state: InvestigationState) -> InvestigationState:
         re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip() or None
     )
 
+    # Capture question classification stated by the agent in the plan phase.
+    # The system prompt instructs the agent to state its classification in the
+    # first plan turn; we persist it so critique can apply the right checks.
+    if state.phase == Phase.PLAN and state.question_type is None and state.pending_reasoning:
+        r = state.pending_reasoning.upper()
+        if "CROSS-SECTIONAL" in r or "CROSS_SECTIONAL" in r:
+            state.question_type = "CROSS_SECTIONAL"
+        elif "TIME-SERIES" in r or "TIME_SERIES" in r:
+            state.question_type = "TIME_SERIES"
+        elif "EXPLORATORY" in r:
+            state.question_type = "EXPLORATORY"
+
     pending: list[ToolResult] = []
     for tc in response.tool_calls or []:
         pending.append(
@@ -303,29 +315,62 @@ def critique(state: InvestigationState) -> InvestigationState:
         evidence_count=len(state.evidence),
         retry_count=state.retry_count,
         max_retries=MAX_RETRIES,
+        question_type=state.question_type,
     )
 
     llm = get_llm()
     response = llm.invoke([HumanMessage(content=critique_prompt)])
 
     text = response.content if isinstance(response.content, str) else str(response.content)
-    text_lower = text.lower().strip()
-    # Strip Markdown bold markers and code-fence backticks so "**VERDICT: strong**"
-    # and "`VERDICT: strong`" both parse correctly.
-    first_line = text_lower.split("\n")[0].strip("* `")
-    if first_line.startswith("verdict:") and "strong" in first_line:
-        state.critique_passed = True
-        state.critique_feedback = None
-    elif "evidence is strong" in text_lower or "proceed to report" in text_lower:
+    # Remove <think> / </think> markers but keep their content — Qwen3/MiniMax
+    # thinking mode sometimes embeds the VERDICT line inside a think block.
+    # Stripping the whole block would discard the verdict; removing only the
+    # tags makes the full response visible to the parser below.
+    text = re.sub(r"</?think>", "", text).strip()
+    # Scan ALL lines for the VERDICT — the model may emit preamble or thinking
+    # prose before the verdict line (especially after <think> tag removal).
+    # Strip Markdown bold markers and code-fence backticks from each line so
+    # "**VERDICT: strong**" and "`VERDICT: strong`" both parse correctly.
+    stripped_lines = [ln.strip() for ln in text.split("\n")]
+
+    # Find VERDICT on any line — model may emit preamble or inline prose before
+    # or alongside the keyword.  Use a regex search so "After review, VERDICT: weak"
+    # is captured even though it doesn't start with "verdict:".
+    verdict_idx: int | None = None
+    verdict_word: str | None = None
+    for i, ln in enumerate(stripped_lines):
+        m = re.search(r"\bverdict\s*:\s*(\w+)", ln.lower().strip("* `"))
+        if m:
+            verdict_idx = i
+            verdict_word = m.group(1)
+            break
+
+    if verdict_idx is not None:
+        if verdict_word == "strong":
+            state.critique_passed = True
+            state.critique_feedback = None
+        else:
+            # Justification = lines after the VERDICT line — directed at the retry.
+            justification_lines = [ln for ln in stripped_lines[verdict_idx + 1 :] if ln]
+            state.critique_feedback = " ".join(justification_lines) or None
+            state.critique_passed = False
+            state.retry_count += 1
+            if state.retry_count >= MAX_RETRIES:
+                logger.warning("Max critique retries (%d) reached; forcing report.", MAX_RETRIES)
+                state.critique_passed = True
+                state.error = "Max critique retries reached. Evidence may be incomplete."
+    elif any(
+        # Require the keyword to open the line (optionally preceded by "the") —
+        # avoids false-positive on prose like "while the evidence is strong for X,
+        # the after-period is missing." but still matches "The evidence is strong."
+        re.match(r"(the\s+)?evidence is strong|(the\s+)?proceed to report", ln.lower().strip())
+        for ln in stripped_lines
+    ):
         state.critique_passed = True
         state.critique_feedback = None
     else:
-        # Extract the justification (everything after the first line) as a targeted directive
-        # for the next retry pass so the agent knows exactly what gap to close.
-        justification_lines = [ln.strip() for ln in text.split("\n")[1:] if ln.strip()]
-        state.critique_feedback = " ".join(justification_lines) or None
-
         state.critique_passed = False
+        state.critique_feedback = None
         state.retry_count += 1
         if state.retry_count >= MAX_RETRIES:
             logger.warning("Max critique retries (%d) reached; forcing report.", MAX_RETRIES)
@@ -344,47 +389,47 @@ def report(state: InvestigationState) -> InvestigationState:
     """Assemble and store the final report dict."""
     state.phase = Phase.REPORT
     report_prompt = (
-    f"You are writing the final report for an investigation.\n\n"
-    f"**User question:** {state.user_question}\n\n"
-    f"**Hypotheses considered:**\n{_format_hypotheses(state.hypotheses)}\n\n"
-    f"**Evidence (full tool outputs):**\n"
-    f"{_format_evidence(state.evidence, full_output=True)}\n\n"
-    f"---\n\n"
-    f"Write a concise structured report with the following sections. Do NOT "
-    f"recap every tool call — distill what mattered. Reference specific "
-    f"numbers from the evidence; do not invent any.\n\n"
-    f"**1. Headline answer.** One or two sentences. State the answer to the "
-    f"user's question, after correction if the naive framing was wrong. If "
-    f"your investigation reframed the question (e.g., the user asked 'why "
-    f"did A underperform?' and the answer is 'A was sent to a less-responsive "
-    f"audience, so the question of A's quality is not what the headline gap "
-    f"is measuring'), say so clearly.\n\n"
-    f"**2. Evidence chain.** 3–6 numbered steps showing how you reached the "
-    f"answer. Each step references specific numbers from the evidence above. "
-    f"Show the progression: from the headline observation, through the moves "
-    f"that ruled in or out alternatives, to the conclusion.\n\n"
-    f"**3. Quantified attribution.** When the question compares entities or "
-    f"periods, decompose the headline gap arithmetically:\n"
-    f"   - Aggregate gap: <number>\n"
-    f"   - On overlap / controlled comparison: <number>\n"
-    f"   - Selection or composition effect: <number> (~X% of total)\n"
-    f"   - Genuine effect: <number> (~Y% of total)\n"
-    f"For exploratory questions where attribution doesn't apply, replace "
-    f"this section with the direct answer and supporting numbers.\n\n"
-    f"**4. Residual unexplained.** What part of the observation remains "
-    f"unaccounted for, and why. Be specific about whether the residual is "
-    f"because the data doesn't contain the relevant information (e.g., "
-    f"actual subject text, audience targeting criteria, real-world events) "
-    f"or because the investigation didn't reach it. Do not invent causes "
-    f"for the residual.\n\n"
-    f"**5. Confidence.** high / medium / low — and one sentence on what "
-    f"would raise your confidence (data you don't have, queries you didn't "
-    f"run, etc.).\n\n"
-    f"**6. Next steps.** What an analyst should do next — including "
-    f"investigations that require data outside this dataset.\n\n"
-    f"Make sure to mention any hypotheses that were investigated and ruled "
-    f"out — that's part of showing rigor."
-)
+        f"You are writing the final report for an investigation.\n\n"
+        f"**User question:** {state.user_question}\n\n"
+        f"**Hypotheses considered:**\n{_format_hypotheses(state.hypotheses)}\n\n"
+        f"**Evidence (full tool outputs):**\n"
+        f"{_format_evidence(state.evidence, full_output=True)}\n\n"
+        f"---\n\n"
+        f"Write a concise structured report with the following sections. Do NOT "
+        f"recap every tool call — distill what mattered. Reference specific "
+        f"numbers from the evidence; do not invent any.\n\n"
+        f"**1. Headline answer.** One or two sentences. State the answer to the "
+        f"user's question, after correction if the naive framing was wrong. If "
+        f"your investigation reframed the question (e.g., the user asked 'why "
+        f"did A underperform?' and the answer is 'A was sent to a less-responsive "
+        f"audience, so the question of A's quality is not what the headline gap "
+        f"is measuring'), say so clearly.\n\n"
+        f"**2. Evidence chain.** 3–6 numbered steps showing how you reached the "
+        f"answer. Each step references specific numbers from the evidence above. "
+        f"Show the progression: from the headline observation, through the moves "
+        f"that ruled in or out alternatives, to the conclusion.\n\n"
+        f"**3. Quantified attribution.** When the question compares entities or "
+        f"periods, decompose the headline gap arithmetically:\n"
+        f"   - Aggregate gap: <number>\n"
+        f"   - On overlap / controlled comparison: <number>\n"
+        f"   - Selection or composition effect: <number> (~X% of total)\n"
+        f"   - Genuine effect: <number> (~Y% of total)\n"
+        f"For exploratory questions where attribution doesn't apply, replace "
+        f"this section with the direct answer and supporting numbers.\n\n"
+        f"**4. Residual unexplained.** What part of the observation remains "
+        f"unaccounted for, and why. Be specific about whether the residual is "
+        f"because the data doesn't contain the relevant information (e.g., "
+        f"actual subject text, audience targeting criteria, real-world events) "
+        f"or because the investigation didn't reach it. Do not invent causes "
+        f"for the residual.\n\n"
+        f"**5. Confidence.** high / medium / low — and one sentence on what "
+        f"would raise your confidence (data you don't have, queries you didn't "
+        f"run, etc.).\n\n"
+        f"**6. Next steps.** What an analyst should do next — including "
+        f"investigations that require data outside this dataset.\n\n"
+        f"Make sure to mention any hypotheses that were investigated and ruled "
+        f"out — that's part of showing rigor."
+    )
 
     llm = get_llm()
     # MiniMax rejects single HumanMessage; prepend a dummy HumanMessage to keep it happy.

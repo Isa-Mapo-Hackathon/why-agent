@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
-from agent.graph import MAX_RETRIES, build_graph, critique, report
-from agent.prompts import _render_system
+from agent.graph import MAX_RETRIES, build_graph, critique, llm_call, report
+from agent.prompts import _render_critique, _render_system
 from agent.state import (
     EvidenceEntry,
     Hypothesis,
@@ -35,6 +35,7 @@ class TestInvestigationState:
         assert state.final_report is None
         assert state.critique_feedback is None
         assert state.pending_reasoning is None
+        assert state.question_type is None
 
     def test_add_evidence(self):
         state = InvestigationState(user_question="test")
@@ -254,6 +255,54 @@ class TestCritiqueNode:
         assert result.critique_passed is True
         assert result.critique_feedback is None
 
+    def test_inline_verdict_weak_captured(self):
+        """VERDICT: weak embedded mid-line (not line-initial) must still be parsed."""
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "After review, VERDICT: weak — the after-period is missing."
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is False
+
+    def test_inline_verdict_strong_captured(self):
+        """VERDICT: strong embedded mid-line must still be parsed."""
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "Based on the evidence, VERDICT: strong — answer is complete."
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is True
+
+    def test_no_verdict_no_fallback_increments_retry(self):
+        """No VERDICT line and no fallback keyword → retry incremented, feedback None."""
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "The data supports the hypothesis partially."
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is False
+        assert result.critique_feedback is None
+        assert result.retry_count == 1
+
+    def test_fallback_strong_requires_line_start_not_mid_sentence(self):
+        """'evidence is strong' mid-sentence must NOT trigger the fallback."""
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "While the evidence is strong for the headline metric, the after-period is missing.\n"
+            "VERDICT: weak"
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        # The VERDICT: weak line takes priority; fallback must NOT override it
+        assert result.critique_passed is False
+
     def test_weak_verdict_no_justification_text_sets_feedback_none(self):
         state = _blank_state()
         mock_llm = MagicMock()
@@ -289,3 +338,183 @@ class TestReportNode:
             result = report(state)
         assert result.phase == Phase.REPORT
         assert result.final_report is not None
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — <think> tag stripping in critique parser
+# ---------------------------------------------------------------------------
+
+
+class TestCritiqueThinkTagStripping:
+    """VERDICT buried inside <think> tags must still be parsed correctly."""
+
+    def test_verdict_strong_inside_think_block(self):
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "<think>\nVERDICT: strong\nEvidence is sufficient.\n</think>"
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is True
+        assert result.critique_feedback is None
+
+    def test_verdict_weak_inside_think_block(self):
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "<think>\nVERDICT: weak\nMissing comparison data.\n</think>"
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is False
+
+    def test_verdict_strong_after_think_block(self):
+        state = _blank_state()
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response(
+            "<think>thinking...</think>\nVERDICT: strong\nGood evidence."
+        )
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = critique(state)
+        assert result.critique_passed is True
+
+
+# ---------------------------------------------------------------------------
+# Fix 1a — question_type field on InvestigationState
+# ---------------------------------------------------------------------------
+
+
+class TestQuestionTypeField:
+    def test_default_is_none(self):
+        state = InvestigationState(user_question="How many campaigns?")
+        assert state.question_type is None
+
+    def test_can_be_set_on_construction(self):
+        state = InvestigationState(user_question="How many campaigns?", question_type="EXPLORATORY")
+        assert state.question_type == "EXPLORATORY"
+
+    def test_can_be_set_after_construction(self):
+        state = InvestigationState(user_question="How many campaigns?")
+        state.question_type = "TIME_SERIES"
+        assert state.question_type == "TIME_SERIES"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1b — plan phase captures question_type from LLM reasoning
+# ---------------------------------------------------------------------------
+
+
+def _mock_plan_llm(classification: str) -> MagicMock:
+    """Return a mock LLM whose plan-phase response contains the given classification keyword."""
+    resp = MagicMock()
+    resp.content = f"This is a {classification} question. Let me inspect the schema."
+    resp.tool_calls = []
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.invoke.return_value = resp
+    return mock_llm
+
+
+class TestPlanPhaseCapture:
+    def test_exploratory_classification_captured(self):
+        state = InvestigationState(user_question="How many campaigns are there?")
+        state.phase = Phase.PLAN
+        with patch("agent.graph.get_llm", return_value=_mock_plan_llm("EXPLORATORY")):
+            result = llm_call(state)
+        assert result.question_type == "EXPLORATORY"
+
+    def test_cross_sectional_classification_captured(self):
+        state = InvestigationState(user_question="Why does campaign A outperform B?")
+        state.phase = Phase.PLAN
+        with patch("agent.graph.get_llm", return_value=_mock_plan_llm("CROSS-SECTIONAL")):
+            result = llm_call(state)
+        assert result.question_type == "CROSS_SECTIONAL"
+
+    def test_time_series_classification_captured(self):
+        state = InvestigationState(user_question="Why did open rate drop in June?")
+        state.phase = Phase.PLAN
+        with patch("agent.graph.get_llm", return_value=_mock_plan_llm("TIME-SERIES")):
+            result = llm_call(state)
+        assert result.question_type == "TIME_SERIES"
+
+    def test_no_classification_leaves_none(self):
+        state = InvestigationState(user_question="test")
+        state.phase = Phase.PLAN
+        mock_llm = _mock_plan_llm("")  # no keyword in response
+        mock_llm.invoke.return_value.content = "Let me look at the data."
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            result = llm_call(state)
+        assert result.question_type is None
+
+    def test_non_plan_phase_does_not_overwrite(self):
+        state = InvestigationState(user_question="test", question_type="EXPLORATORY")
+        state.phase = Phase.DECOMPOSE  # not PLAN
+        with patch("agent.graph.get_llm", return_value=_mock_plan_llm("TIME-SERIES")):
+            result = llm_call(state)
+        assert result.question_type == "EXPLORATORY"  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Fix 1c — _render_critique generates question-type-specific required checks
+# ---------------------------------------------------------------------------
+
+
+class TestRenderCritiqueQuestionType:
+    def _render(self, question_type: str | None) -> str:
+        return _render_critique(
+            user_question="test question",
+            hypotheses="No hypotheses.",
+            evidence_summary="Some evidence.",
+            evidence_count=2,
+            retry_count=0,
+            max_retries=2,
+            question_type=question_type,
+        )
+
+    def test_exploratory_contains_direct_answer_check(self):
+        out = self._render("EXPLORATORY")
+        assert "directly answered" in out.lower()
+
+    def test_exploratory_omits_both_sides_check(self):
+        out = self._render("EXPLORATORY")
+        assert "both sides" not in out.lower()
+
+    def test_comparison_contains_both_sides_check(self):
+        out = self._render("CROSS_SECTIONAL")
+        assert "both sides" in out.lower()
+
+    def test_time_series_contains_both_sides_check(self):
+        out = self._render("TIME_SERIES")
+        assert "both sides" in out.lower()
+
+    def test_none_type_falls_back_to_comparison_checks(self):
+        out = self._render(None)
+        assert "both sides" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Fix 1d — critique node passes question_type to prompt when set
+# ---------------------------------------------------------------------------
+
+
+class TestCritiqueUsesQuestionType:
+    def test_exploratory_state_sends_exploratory_guidance_in_prompt(self):
+        state = _blank_state()
+        state.question_type = "EXPLORATORY"
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("VERDICT: strong\nDirect answer found.")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            critique(state)
+        prompt_sent = mock_llm.invoke.call_args[0][0][0].content
+        assert "directly answered" in prompt_sent.lower()
+
+    def test_cross_sectional_state_sends_comparison_guidance_in_prompt(self):
+        state = _blank_state()
+        state.question_type = "CROSS_SECTIONAL"
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = _make_llm_response("VERDICT: strong\nBoth sides measured.")
+        with patch("agent.graph.get_llm", return_value=mock_llm):
+            critique(state)
+        prompt_sent = mock_llm.invoke.call_args[0][0][0].content
+        assert "both sides" in prompt_sent.lower()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -103,6 +103,11 @@ class InvestigationState(BaseModel):
     pending_reasoning: str | None = Field(
         default=None,
         description="LLM text from the most recent llm_call, attached to the first tool entry of the next batch.",
+    )
+
+    question_type: Literal["CROSS_SECTIONAL", "TIME_SERIES", "EXPLORATORY"] | None = Field(
+        default=None,
+        description="Question classification set during plan phase.",
     )
 
     critique_feedback: str | None = Field(
