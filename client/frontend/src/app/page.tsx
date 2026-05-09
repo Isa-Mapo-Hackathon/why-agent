@@ -5,6 +5,7 @@ import type { ChatEntry, EvidenceItem, Phase, ReportData } from "@/lib/types";
 import { runInvestigation } from "@/lib/sseClient";
 import ChatInput from "@/components/ChatInput";
 import DatasetInfo from "@/components/DatasetInfo";
+import ResizableSidebar from "@/components/ResizableSidebar";
 import DemoQuestions from "@/components/DemoQuestions";
 import ElapsedTimer from "@/components/ElapsedTimer";
 import EvidencePanel from "@/components/EvidencePanel";
@@ -120,7 +121,7 @@ export default function Home() {
   return (
     <div className="flex overflow-hidden bg-bg" style={{ height: "100svh" }}>
       {/* Sidebar */}
-      <aside className="w-56 shrink-0 flex flex-col bg-bg border-r border-frame">
+      <ResizableSidebar>
         <div className="px-5 py-5 border-b border-frame">
           <div className="flex items-center gap-2.5">
             <div className="w-2 h-2 rounded-full bg-violet-400 animate-glow shrink-0" />
@@ -146,7 +147,7 @@ export default function Home() {
             {streaming ? "investigating" : "ready"}
           </span>
         </div>
-      </aside>
+      </ResizableSidebar>
 
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0 bg-bg">
