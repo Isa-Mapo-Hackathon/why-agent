@@ -3,7 +3,7 @@ import type { SseEvent } from "./types";
 export async function runInvestigation(
   question: string,
   onEvent: (event: SseEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch("/api/investigate", {
     method: "POST",
@@ -46,5 +46,11 @@ export async function runInvestigation(
       }
     }
     void eventType; // consumed above via parsed.type
+  }
+
+  // Body stream closed quietly while signal was already aborted — surface it so
+  // the caller can distinguish a user-cancel from a clean server-side finish.
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
   }
 }
