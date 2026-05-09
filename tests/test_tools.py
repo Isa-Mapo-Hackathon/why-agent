@@ -346,6 +346,43 @@ class TestRunSql:
         assert result.error is None
         assert result.row_count == 2  # Apple (1.50) and Banana (0.75)
 
+    def test_allows_leading_line_comments_before_select(
+        self, conn: duckdb.DuckDBPyConnection
+    ) -> None:
+        result = run_sql(
+            RunSqlInput(
+                query="-- check cheap products\nSELECT id, name FROM products WHERE price < 2"
+            ),
+            conn,
+        )
+
+        assert result.error is None
+        assert result.row_count == 2
+
+    def test_allows_leading_block_comments_before_with(
+        self, conn: duckdb.DuckDBPyConnection
+    ) -> None:
+        result = run_sql(
+            RunSqlInput(
+                query=(
+                    "/* build a small subset */\n"
+                    "WITH cheap AS (SELECT * FROM products WHERE price < 2) SELECT * FROM cheap"
+                )
+            ),
+            conn,
+        )
+
+        assert result.error is None
+        assert result.row_count == 2
+
+    def test_rejects_write_statement_after_leading_comment(
+        self, conn: duckdb.DuckDBPyConnection
+    ) -> None:
+        result = run_sql(RunSqlInput(query="-- not actually safe\nDROP TABLE products"), conn)
+
+        assert result.error is not None
+        assert result.row_count == 0
+
     def test_bad_table_returns_error_dict(self, conn: duckdb.DuckDBPyConnection) -> None:
         result = run_sql(RunSqlInput(query="SELECT * FROM nonexistent"), conn)
 

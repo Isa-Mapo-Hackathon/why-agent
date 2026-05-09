@@ -203,7 +203,7 @@ export default function Home() {
                     finalMs={entry.elapsedMs}
                   />
                 </div>
-                <div className="bg-bg p-5 space-y-5">
+                <div className={`bg-bg p-5 ${entry.streaming ? "space-y-3" : "space-y-5"}`}>
                   {entry.phases.length > 0 && (
                     <PhaseTimeline
                       currentPhase={
