@@ -2,11 +2,11 @@
 # Start vLLM server on AMD MI300X using the pre-pulled Docker image.
 # The AMD Developer Cloud droplet already has vllm/vllm-openai-rocm:v0.17.1 cached.
 # Usage: bash scripts/start_vllm.sh
-# Endpoint after start: http://165.245.128.117:8000/v1
+# Endpoint after start: http://129.212.177.179:8000/v1
 
 set -euo pipefail
 
-DROPLET="root@165.245.128.117"
+DROPLET="root@129.212.177.179"
 MODEL="Qwen/Qwen3-30B-A3B"
 PORT=8000
 CONTAINER="vllm-server"
@@ -58,8 +58,8 @@ echo "==> Container started. Waiting for server to be ready (model download + lo
 # Poll /health — up to 10 min for first run (model download)
 for i in \$(seq 1 60); do
   if curl -sf http://localhost:${PORT}/health >/dev/null 2>&1; then
-    echo "==> Server is UP at http://165.245.128.117:${PORT}/v1"
-    echo "    Set: VLLM_ENDPOINT=http://165.245.128.117:${PORT}/v1"
+    echo "==> Server is UP at http://129.212.177.179:${PORT}/v1"
+    echo "    Set: VLLM_ENDPOINT=http://129.212.177.179:${PORT}/v1"
     exit 0
   fi
   echo "    Waiting... (\${i}/60) — check logs: docker logs ${CONTAINER}"
