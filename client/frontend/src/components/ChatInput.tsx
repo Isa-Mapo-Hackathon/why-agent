@@ -37,7 +37,7 @@ export default function ChatInput({ onSubmit, onAbort, disabled }: Props) {
             submit();
           }
         }}
-        placeholder="Why did metric X move?"
+        placeholder="Why did campaign A outperform B?"
         disabled={disabled}
         rows={1}
         className="flex-1 bg-transparent py-3.5 text-sm text-white placeholder-violet-700 resize-none focus:outline-none font-mono"

@@ -9,6 +9,7 @@ import ResizableSidebar from "@/components/ResizableSidebar";
 import DemoQuestions from "@/components/DemoQuestions";
 import ElapsedTimer from "@/components/ElapsedTimer";
 import EvidencePanel from "@/components/EvidencePanel";
+import HowItWorks from "@/components/HowItWorks";
 import PhaseTimeline from "@/components/PhaseTimeline";
 import ReportView from "@/components/ReportView";
 
@@ -130,21 +131,24 @@ export default function Home() {
             </span>
           </div>
           <p className="text-xs text-violet-400 mt-1 pl-[18px]">
-            root-cause intelligence
+            the analyst your dashboard needs
           </p>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-4">
           <DemoQuestions onSelect={submit} disabled={streaming} />
+          <div className="border-t border-frame pt-4">
+            <HowItWorks />
+          </div>
           <div className="border-t border-frame pt-4">
             <DatasetInfo />
           </div>
         </div>
         <div className="px-5 py-3 border-t border-frame flex items-center gap-2">
           <div
-            className={`w-2 h-2 rounded-full transition-colors ${streaming ? "bg-violet-400 animate-pulse" : "bg-frame"}`}
+            className={`w-2 h-2 rounded-full transition-colors ${streaming ? "bg-violet-400 animate-pulse" : "bg-emerald-400"}`}
           />
           <span className="text-xs font-mono text-violet-400">
-            {streaming ? "investigating" : "ready"}
+            {streaming ? "Investaging" : "ready"}
           </span>
         </div>
         <div className="px-5 py-2.5 border-t border-frame">
@@ -164,12 +168,9 @@ export default function Home() {
               </div>
               <div className="space-y-1.5">
                 <p className="text-violet-200 text-sm font-semibold">
-                  Ask why a metric moved
+                  Ask why your data looks the way it does
                 </p>
                 <p className="text-violet-500 text-xs max-w-xs leading-relaxed">
-                  e.g. &ldquo;Why did campaign 361 convert 60× better than
-                  296?&rdquo;
-                  <br />
                   Open the <span className="text-violet-400">Dataset</span>{" "}
                   panel on the left to see what&apos;s available.
                 </p>
