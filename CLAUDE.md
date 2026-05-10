@@ -34,7 +34,7 @@ You are the primary code-writer for this project. The human team supervises, rev
 
 ## What this project is, in 3 lines
 
-A single LangGraph agent that investigates "why did metric X move?" by calling four tools against any DuckDB-on-Parquet dataset the user provides. Described by a YAML semantic layer. Served by Llama-3.3-70B on AMD MI300X via vLLM, with MiniMax API as a dev/fallback backend. Demoed in a Streamlit app deployed to Streamlit Community Cloud.
+A single LangGraph agent that investigates "why did metric X move?" by calling four tools against any DuckDB-on-Parquet dataset the user provides. Described by a YAML semantic layer. Served by Qwen3-30B-A3B on AMD MI300X via vLLM, with MiniMax API as a dev/fallback backend. UI is a Next.js frontend + FastAPI backend, deployed to HF Spaces via Docker.
 
 If a task you're given doesn't fit that shape, push back before coding.
 
@@ -47,12 +47,12 @@ If a task you're given doesn't fit that shape, push back before coding.
 | Architecture | Single agent. Not multi-agent. |
 | Tool count | 4. Not 5, not 6, not 3. |
 | Orchestration | LangGraph. Not CrewAI, AutoGen, raw SDK loops, etc. |
-| Model (prod) | `meta-llama/Llama-3.3-70B-Instruct`, BF16, via vLLM |
+| Model (prod) | `Qwen/Qwen3-30B-A3B`, via vLLM on AMD MI300X |
 | Model (dev) | `MiniMax-M1` via MiniMax API (`MINIMAX_API_KEY`) |
 | Data engine | DuckDB on Parquet. No Postgres, no Snowflake. |
 | Semantic layer | Single YAML file, hand-written. No dbt, no Cube. |
-| UI | Streamlit. Not Next.js, not Gradio, not FastAPI-only. |
-| Hosting | Streamlit Community Cloud. Not DOKS, not App Platform. |
+| UI | Next.js frontend + FastAPI backend. Not Streamlit, not Gradio. |
+| Hosting | HF Spaces via Docker. |
 | License | MIT |
 | Repo name | `why-agent` |
 
@@ -106,7 +106,7 @@ why-agent/
 ├── .python-version                  # 3.12
 ├── .env.example
 ├── .gitignore
-├── streamlit_app.py                 # Streamlit Cloud entrypoint
+├── Dockerfile                       # Multi-stage HF Spaces image
 │
 ├── agent/
 │   ├── __init__.py
@@ -124,26 +124,32 @@ why-agent/
 │       ├── decompose_metric.py
 │       └── compare_periods.py
 │
+├── client/
+│   ├── backend/                     # FastAPI server (http://localhost:8000)
+│   │   ├── main.py
+│   │   ├── deps.py
+│   │   └── sse.py
+│   └── frontend/                    # Next.js app (http://localhost:3000)
+│       ├── src/
+│       └── package.json
+│
 ├── data/
-│   ├── extract/
 │   ├── parquet/                     # gitignored
 │   └── semantic_layer.yml
 │
-├── replays/                         # Pre-recorded investigations (JSON)
-│
 ├── docker/
-│   ├── Dockerfile.vllm              # MI300X serving image
-│   └── docker-compose.yml
+│   ├── entrypoint.sh
+│   ├── nginx.conf
+│   └── supervisord.conf
 │
 ├── scripts/
 │   ├── start_vllm.sh                # Provision droplet + vLLM
-│   ├── stop_vllm.sh                 # DESTROY droplet (not stop)
-│   └── record_replay.py             # Save canonical investigation
+│   └── stop_vllm.sh                 # DESTROY droplet (not stop)
 │
 ├── tests/
 │   ├── test_tools.py
 │   ├── test_client_backends.py      # MUST exist — verifies MODEL_BACKEND switch
-│   └── test_agent_smoke.py
+│   └── test_graph_smoke.py
 │
 └── docs/
 └── (additional notes if needed)
@@ -166,10 +172,10 @@ uv add --dev <package>    # dev only
 ```
 
 **Approved deps (no need to ask):**
-`langgraph`, `langchain-anthropic`, `langchain-openai`, `pydantic`, `duckdb`, `pyarrow`, `streamlit`, `pyyaml`, `langsmith`, `python-dotenv`
+`langgraph`, `langchain-anthropic`, `langchain-openai`, `pydantic`, `duckdb`, `pyarrow`, `fastapi`, `uvicorn`, `pyyaml`, `langsmith`, `python-dotenv`
 
 **Ask before adding:**
-Anything else, especially: vector DBs, embedding libs, additional agent frameworks, ORM libraries, web frameworks beyond Streamlit, anything heavyweight.
+Anything else, especially: vector DBs, embedding libs, additional agent frameworks, ORM libraries, additional web frameworks, anything heavyweight.
 
 ---
 
@@ -181,16 +187,11 @@ Canonical commands. If you need to run the project, this is what to type — don
 # Install / sync deps
 uv sync
 
-# --- Run the app (default: FastAPI backend + Next.js frontend) ---
-
 # Terminal 1 — FastAPI backend (http://localhost:8000)
 uv run uvicorn client.backend.main:app --reload --port 8000
 
 # Terminal 2 — Next.js frontend (http://localhost:3000)
 cd client/frontend && npm install && npm run dev
-
-# --- Alternative: Streamlit UI (simpler, single terminal) ---
-uv run streamlit run streamlit_app.py   # http://localhost:8501
 
 # Run all tests
 uv run pytest
@@ -204,45 +205,38 @@ uv run ruff format
 
 # Optional local type check (not in CI)
 uv run pyright
-
-# Record a replay (writes replays/<scenario_id>.json)
-uv run python scripts/record_replay.py --scenario <id>
 ```
 
 Required env vars (see `.env.example`):
 
 ```
-MODEL_BACKEND=minimax | vllm | replay
+MODEL_BACKEND=minimax | vllm
 MINIMAX_API_KEY=...                      # required when MODEL_BACKEND=minimax
 VLLM_ENDPOINT=http://host:8000/v1        # required when MODEL_BACKEND=vllm — include /v1
-REPLAY_SCENARIO_ID=...                   # required when MODEL_BACKEND=replay (or pass to get_llm())
 PARQUET_DIR=data/parquet                 # default
 SEMANTIC_LAYER_PATH=data/semantic_layer.yml
 ```
 
 ---
 
-## Three model backends — env-switchable
+## Two model backends — env-switchable
 
-The LLM client (`agent/client.py`) MUST support three backends switched by env var:
+The LLM client (`agent/client.py`) supports two backends switched by env var:
 
 ```bash
 MODEL_BACKEND=minimax      # ChatOpenAI-compatible client pointed at MiniMax API, MiniMax-M1
-MODEL_BACKEND=vllm         # ChatOpenAI pointed at VLLM_ENDPOINT
-MODEL_BACKEND=replay       # Read pre-recorded JSON, no real LLM call
+MODEL_BACKEND=vllm         # ChatOpenAI pointed at VLLM_ENDPOINT (AMD MI300X + Qwen3-30B-A3B)
 ```
 
-This is **critical infrastructure**. Implement it before any agent work. Every other piece of the codebase imports from `agent.client.get_llm()` and never instantiates an LLM directly.
+Every piece of the codebase imports from `agent.client.get_llm()` and never instantiates an LLM directly. An unknown `MODEL_BACKEND` value raises a clear error at startup.
 
-`replay` mode reads from `replays/<scenario_id>.json` and yields the same message/tool-call sequence the live agent produced when recorded. It is essential for the public demo when the GPU is off.
-
-Because this is critical infrastructure, `tests/test_client_backends.py` must exist and assert: each `MODEL_BACKEND` value (`minimax`, `vllm`, `replay`) returns a client of the expected type, and an unknown value raises a clear error. This test runs without network — `minimax` and `vllm` paths assert on construction, not invocation.
+`tests/test_client_backends.py` asserts that each valid backend returns a client of the expected type and that an unknown value raises. This test runs without network — both paths assert on construction, not invocation.
 
 ---
 
 ## Coding conventions
 
-- **Sync by default.** DuckDB has no async API, LangGraph nodes are sync, Streamlit is sync. Use `async def` only at the LLM-client boundary (e.g. `langchain-anthropic.ainvoke`) and only if it actually buys concurrency. Do not wrap sync DuckDB calls in `async def`.
+- **Sync by default.** DuckDB has no async API and LangGraph nodes are sync. Use `async def` only at the LLM-client boundary (e.g. `langchain-anthropic.ainvoke`) and only if it actually buys concurrency. Do not wrap sync DuckDB calls in `async def`.
 - **Pydantic v2** for all structured data: tool inputs, agent state, semantic layer.
 - **Type-annotate public functions** — tool signatures, graph nodes, anything imported across modules. Return types included. Annotations are not enforced in CI for hackathon scope; if you want enforcement, run `pyright` locally before committing. Don't claim "typed everywhere" without a checker — pick consistency over a slogan.
 - **No print()** in agent code. Use `logger = logging.getLogger(__name__)`. Print is fine in scripts.
@@ -340,8 +334,6 @@ If a request implies one of these, ask: "this looks like X which we marked out o
 ## Demo discipline
 
 - Don't claim "60 seconds" anywhere in copy. Use "minutes vs hours."
-- Every demo scenario must have a recorded replay committed before the public URL goes live.
-- The Streamlit app must always work — if every backend is down, replay mode still answers.
 - The public URL is the only way judges access the demo. Don't break it.
 - (Tool error handling lives in the tool contract section above, not here.)
 
