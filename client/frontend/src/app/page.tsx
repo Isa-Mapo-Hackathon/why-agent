@@ -145,7 +145,7 @@ export default function Home() {
         </div>
         <div className="px-5 py-3 border-t border-frame flex items-center gap-2">
           <div
-            className={`w-2 h-2 rounded-full transition-colors ${streaming ? "bg-violet-400 animate-pulse" : "bg-frame"}`}
+            className={`w-2 h-2 rounded-full transition-colors ${streaming ? "bg-violet-400 animate-pulse" : "bg-emerald-400"}`}
           />
           <span className="text-xs font-mono text-violet-400">
             {streaming ? "investigating" : "ready"}
