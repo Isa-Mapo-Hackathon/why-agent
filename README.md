@@ -1,14 +1,3 @@
----
-title: why-agent
-emoji: 🔍
-colorFrom: indigo
-colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
----
-
 # why-agent — internal working doc
 
 Owners: Mapo, Isa
