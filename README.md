@@ -23,7 +23,7 @@ why we agreed on it, and who owns what. Update it when decisions change.
 An autonomous root-cause agent for data. User asks **"why did metric X
 move?"** — agent investigates and returns a structured report with an
 evidence chain. Works against any user-provided DuckDB/Parquet dataset.
-Built on AMD MI300X, deployed to Streamlit Community Cloud.
+Built on AMD MI300X, deployed to HF Spaces via Docker.
 
 Working name: **Why Agent**. Repo name: `why-agent`.
 
@@ -84,43 +84,39 @@ Judge / user                            Cost
 │                                  ────
 ▼
 ┌──────────────────────────────┐        $0
-│ Streamlit Cloud              │
-│ https://why-agent...         │
-│                              │
-│  UI + agent + tools + data   │
-│  all in one Python process   │
+│ HF Spaces (Docker)           │
+│ Next.js frontend             │
+│ FastAPI backend              │
+│ Agent + tools + data         │
 └──────────────┬───────────────┘
                │ HTTPS, OpenAI-compat
                ▼
 ┌──────────────────────────────┐        $1.99/hr
 │ AMD MI300X droplet           │        (when ON)
-│ vLLM + Llama-3.3-70B BF16    │
+│ vLLM + Qwen3-30B-A3B         │
 └──────────────────────────────┘
 ```
 
-![Architecture diagram](docs/why-agent-architecture.png)
-
 **Three logical pieces:**
-1. **The model** — vLLM serving Llama 70B on MI300X. Heavy, expensive.
-2. **The agent** — Python code (LangGraph). Light, runs anywhere.
+1. **The model** — vLLM serving Qwen3-30B-A3B on MI300X. Heavy, expensive.
+2. **The agent** — Python code (LangGraph + FastAPI). Light, runs anywhere.
 3. **The data** — DuckDB on Parquet + a YAML semantic layer. Tiny.
 
-Everything except the model lives inside one Streamlit app on
-Streamlit Cloud. The model is reached via HTTPS to the AMD droplet.
+The UI (Next.js) and agent (FastAPI) run together in a Docker container on
+HF Spaces. The model is reached via HTTPS to the AMD droplet.
 
 ### Why this split
 
 - The model needs a GPU. Nothing else does.
-- Streamlit Cloud is free; GPU droplets are $1.99/hr.
-- The agent can use Anthropic API as a fallback when the GPU is off.
+- HF Spaces is free; GPU droplets are $1.99/hr.
+- The agent can fall back to MiniMax API when the GPU is off.
 - Iteration speed: code changes don't redeploy the GPU.
 
-### Three model backends, env-switchable
-MODEL_BACKEND=minimax     → MiniMax API (MiniMax-M2.7). Use Days 1-2 (no GPU).
-MODEL_BACKEND=vllm        → MI300X. Use Day 3+ for integration & demo.
-MODEL_BACKEND=replay      → Pre-recorded traces. For demo when GPU off.
+### Two model backends, env-switchable
+MODEL_BACKEND=minimax     → MiniMax API (MiniMax-M1). Use for dev/fallback (no GPU).
+MODEL_BACKEND=vllm        → MI300X. Use for integration & demo.
 
-This is critical infrastructure — implement on Day 1.
+This is critical infrastructure — every LLM call goes through `agent.client.get_llm()`.
 
 ---
 
@@ -211,11 +207,11 @@ without blocking each other.
 
 | Layer | Choice |
 |---|---|
-| Hosting | Streamlit Community Cloud (free, public URL) |
-| Frontend | Streamlit |
-| Backend | LangGraph agent + tools (pure Python, in-process) |
+| Hosting | HF Spaces via Docker |
+| Frontend | Next.js (React + TypeScript) |
+| Backend | FastAPI + LangGraph agent |
 | Orchestration | LangGraph |
-| Model | Llama-3.3-70B-Instruct, BF16 |
+| Model | Qwen3-30B-A3B |
 | Inference | vLLM on ROCm |
 | Hardware | AMD MI300X (1 GPU) |
 | Data engine | DuckDB |
@@ -234,9 +230,7 @@ without blocking each other.
 
 - 🟢 **Live MI300X mode** — full live agent against the GPU.
   Available during scheduled windows we post.
-- 📼 **Replay mode** — pre-recorded canonical investigations,
-  played back from saved JSON traces. Always available.
-- 💬 **Anthropic fallback** — for ad-hoc judge questions when GPU is off.
+- 💬 **MiniMax fallback** — for ad-hoc questions when the GPU is off. Set `MODEL_BACKEND=minimax`.
 
 ### Demo scenarios (rehearsed, deterministic)
 
@@ -296,9 +290,9 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 - LangGraph state machine + agent loop
 - The four tools (Pydantic schemas, implementations)
 - LLM client (multi-backend switching)
-- Streamlit UI (chat, reasoning trace, replay picker)
+- Next.js UI + FastAPI backend
 - vLLM-on-MI300X setup scripts
-- Streamlit Cloud deployment
+- HF Spaces deployment
 - Build-in-public post about the agent design
 
 ### Shared
@@ -317,7 +311,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 | **2** | First end-to-end agent investigation working | Refine semantic layer, prep demo scenarios | Smoke-test with provided dataset |
 | **3** | Switch to vLLM backend, run scenario 1 live | Validate scenario 1 ground truth | First real demo run; identify gaps |
 | **4** | Prompt tuning, self-critique node | Scenario 2 + 3 ground truth | Build-in-public posts |
-| **5** | Streamlit polish, record replays, deploy to Cloud | Final dataset cleanup, write evaluation notes | Rehearse demo |
+| **5** | UI polish, deploy to HF Spaces | Final dataset cleanup, write evaluation notes | Rehearse demo |
 | **6** | Final fixes, submission prep | Final fixes, submission prep | Submit + pitch |
 
 ### What's allowed to slip
@@ -328,7 +322,6 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 ### What is NOT allowed to slip
 - Scenario 1 working end-to-end by Day 3
 - Public URL up and demoable by Day 5
-- Replay mode working by Day 5
 
 ---
 
@@ -341,8 +334,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 2. **The "right answer" for our chosen scenario isn't reachable from
    the data alone.** Mitigation: pick scenario on Day 0; smoke-test
    end-to-end by Day 3.
-3. **Streamlit Cloud RAM limit exceeded by data + agent + LangGraph
-   process overhead.** Mitigation: keep Parquet files under 300 MB total; profile
+3. **HF Spaces memory limit exceeded by data + agent + process overhead.** Mitigation: keep Parquet files under 500 MB total; profile
    on Day 2.
 4. **Live demo timing variance — agent takes 90s instead of 60s.**
    Mitigation: don't claim "60 seconds"; frame as "minutes vs hours."
@@ -354,7 +346,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 - [ ] Which specific question is our hero demo?
 - [ ] Is the semantic layer accurate enough for the demo dataset?
 - [ ] Do we pay $5 for the model-weights block volume?
-- [ ] Do we want a custom domain, or is `*.streamlit.app` fine? *(default: streamlit.app fine)*
+- [ ] Do we want a custom domain, or is the HF Spaces URL fine? *(default: HF Spaces URL fine)*
 
 ---
 
@@ -375,7 +367,7 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 
 | Component | Status |
 |---|---|
-| LLM client — 3 backends (`minimax`, `vllm`, `replay`) | ✅ done |
+| LLM client — 2 backends (`minimax`, `vllm`) | ✅ done |
 | Pydantic state model (`InvestigationState`) | ✅ done |
 | LangGraph state machine (6-phase loop) | ✅ done |
 | `inspect_schema` tool | ✅ done — derived dimensions surface SQL expression |
@@ -384,10 +376,10 @@ Mapo owns *agent + interface*. The handoff is `semantic_layer.yml`.
 | `decompose_metric` tool | ✅ done |
 | System + critique prompts | ✅ done |
 | REPL for local testing | ✅ done |
-| Streamlit UI | ✅ done |
+| Next.js UI + FastAPI backend | ✅ done |
 | Demo dataset in `data/parquet/` | ✅ done |
-| Replay recording script | ⬜ pending |
-| vLLM Docker + MI300X scripts | ⬜ pending |
+| vLLM Docker + MI300X scripts | ✅ done |
+| HF Spaces deployment | ✅ done |
 
 ---
 
@@ -414,30 +406,24 @@ uv run python scripts/repl_graph.py
 # Lint + format (must be clean before any commit)
 uv run ruff check --fix && uv run ruff format
 
-# Run the app — FastAPI backend + Next.js frontend (default)
+# Run the app — FastAPI backend + Next.js frontend
 uv run uvicorn client.backend.main:app --reload --port 8000  # Terminal 1
 cd client/frontend && npm run dev                             # Terminal 2
-
-# Alternative: Streamlit (single terminal)
-uv run streamlit run streamlit_app.py
 ```
 
 ### Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `MODEL_BACKEND` | Yes | `minimax` / `vllm` / `replay` |
+| `MODEL_BACKEND` | Yes | `minimax` or `vllm` |
 | `MINIMAX_API_KEY` | When `MODEL_BACKEND=minimax` | MiniMax API key |
 | `VLLM_ENDPOINT` | When `MODEL_BACKEND=vllm` | e.g. `http://host:8000/v1` |
-| `REPLAY_SCENARIO_ID` | When `MODEL_BACKEND=replay` | Scenario JSON filename (without `.json`) |
 | `PARQUET_DIR` | No | Path to Parquet files (default: `data/parquet`) |
 | `SEMANTIC_LAYER_PATH` | No | Default: `data/semantic_layer.yml` |
 
 ---
 
 ## 16. Running Locally (Full Stack)
-
-### Default: FastAPI + Next.js
 
 **Terminal 1 — FastAPI backend:**
 
@@ -457,16 +443,6 @@ npm run dev
 
 Frontend runs at `http://localhost:3000`.
 
-### Alternative: Streamlit UI
-
-Single terminal, no frontend setup needed. Use this for quick iteration on the agent loop.
-
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-Opens at `http://localhost:8501`.
-
 ### Common development commands
 
 | Task | Command |
@@ -474,13 +450,12 @@ Opens at `http://localhost:8501`.
 | Install/sync deps | `uv sync` |
 | Add dependency | `uv add <package>` (runtime) or `uv add --dev <package>` (dev) |
 | Run all tests | `uv run pytest -v` |
-| Run one test file | `uv run pytest tests/test_agent_smoke.py -v` |
+| Run one test file | `uv run pytest tests/test_tools.py -v` |
 | Lint & auto-fix | `uv run ruff check --fix` |
 | Format code | `uv run ruff format` |
 | Type check (optional) | `uv run pyright` |
 | Run FastAPI backend | `uv run uvicorn client.backend.main:app --reload --port 8000` |
 | Run Next.js frontend | `cd client/frontend && npm run dev` |
-| Run Streamlit (alt) | `uv run streamlit run streamlit_app.py` |
 | Build Next.js | `cd client/frontend && npm run build` |
 | Build Docker image | `docker build -t why-agent:latest .` |
 
@@ -531,11 +506,6 @@ export MODEL_BACKEND=minimax
 uv run python scripts/repl_graph.py
 # > Q: Why did message open rate drop?
 # > Q: Why does weekend engagement differ?
-
-# Against replay (no API key needed)
-export MODEL_BACKEND=replay
-export REPLAY_SCENARIO_ID=scenario_1
-uv run python scripts/repl_graph.py
 ```
 
 ---
@@ -579,21 +549,8 @@ Should return: `{"ok": true}`
 
 | Backend | Use case | Cost | Setup |
 |---------|----------|------|-------|
-| **replay** | Demo when GPU offline, pre-recorded scenarios | Free | Set `REPLAY_SCENARIO_ID=scenario_1` |
-| **minimax** | Fallback LLM for ad-hoc questions | ~$0.01/query | Set `MINIMAX_API_KEY` |
+| **minimax** | Dev/fallback LLM for ad-hoc questions | ~$0.01/query | Set `MINIMAX_API_KEY` |
 | **vllm** | High-quality, fast inference on GPU | $1.99/hr (AMD MI300X) | Set `VLLM_ENDPOINT` |
-
-### Recording demo scenarios for offline playback
-
-When a scenario works end-to-end, record it:
-
-```bash
-export MODEL_BACKEND=minimax
-export MINIMAX_API_KEY=your-key
-uv run python scripts/record_replay.py --scenario scenario_1
-```
-
-This saves `replays/scenario_1.json`. Commit it and deploy with `MODEL_BACKEND=replay`.
 
 ### Docker: build and run locally
 
@@ -611,10 +568,9 @@ Then visit `http://localhost:7860`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_BACKEND` | — | LLM backend: `minimax`, `vllm`, or `replay` |
+| `MODEL_BACKEND` | — | LLM backend: `minimax` or `vllm` |
 | `MINIMAX_API_KEY` | — | MiniMax API key (if using minimax backend) |
 | `VLLM_ENDPOINT` | — | vLLM server URL (if using vllm backend; include `/v1`) |
-| `REPLAY_SCENARIO_ID` | — | Scenario ID for replay mode (filename without `.json`) |
 | `PARQUET_DIR` | `/app/data/parquet` | Path to Parquet dataset directory |
 | `SEMANTIC_LAYER_PATH` | `/app/data/semantic_layer.yml` | Path to semantic layer YAML |
 | `HF_DATASET_ID` | — | HF Dataset ID to auto-download at boot (optional) |
@@ -646,7 +602,6 @@ curl -X POST http://localhost:7860/api/investigate \
 | API returns 500 | Check HF Spaces logs; verify `PARQUET_DIR` and `SEMANTIC_LAYER_PATH` exist |
 | vLLM endpoint unreachable | Verify `VLLM_ENDPOINT` includes `/v1`; check GPU server is running |
 | Data not loading | Set `HF_DATASET_ID` to auto-download, or manually COPY Parquet files into Dockerfile |
-| Replay scenario not found | Verify `REPLAY_SCENARIO_ID` matches filename in `replays/` (without `.json`) |
 
 ---
 
@@ -684,25 +639,20 @@ why-agent/
 │   ├── semantic_layer.yml           # Business metadata, metrics, dimensions, joins
 │   └── root_cause/                  # Ground-truth documentation
 │
-├── replays/                         # Pre-recorded investigation traces (JSON)
-│   └── scenario_1.json
-│
 ├── tests/                           # Python smoke tests
 │   ├── test_tools.py               # Tool execution and output shape
-│   ├── test_client_backends.py     # Verify 3 backends (minimax, vllm, replay)
-│   └── test_agent_smoke.py         # End-to-end agent smoke test
+│   ├── test_client_backends.py     # Verify backends (minimax, vllm)
+│   └── test_graph_smoke.py         # Agent state machine and critique tests
 │
 ├── docker/                          # Container config
-│   ├── Dockerfile                  # Multi-stage: Next.js + Python + nginx
 │   ├── entrypoint.sh               # Boot script (handles HF Dataset download)
 │   ├── nginx.conf                  # Reverse proxy (routes / to Next.js, /api/* to FastAPI)
 │   └── supervisord.conf            # Process management (nginx, FastAPI, Next.js)
 │
 ├── scripts/                         # Utilities
-│   ├── repl_graph.py               # Interactive REPL for testing the agent
-│   └── record_replay.py            # Save a scenario as replay JSON
+│   └── repl_graph.py               # Interactive REPL for testing the agent
 │
-├── streamlit_app.py                # Streamlit UI (standalone, no backend needed)
+├── Dockerfile                      # Multi-stage: Next.js + Python + nginx
 ├── pyproject.toml                  # Dependencies + test config
 ├── Dockerfile                      # Deployment image
 ├── .env.example                    # Environment template
@@ -718,7 +668,7 @@ why-agent/
 
 Per CLAUDE.md, follow these when writing code:
 
-1. **Sync by default** — DuckDB and Streamlit are sync. Use `async def` only at the LLM boundary.
+1. **Sync by default** — DuckDB and LangGraph nodes are sync. Use `async def` only at the LLM boundary.
 2. **Pydantic v2** — All structured data (tool inputs/outputs, state, semantic layer).
 3. **Type annotations** — Required on public functions (args + return type).
 4. **No print()** — Use `logger = logging.getLogger(__name__)` in agent code.
@@ -765,8 +715,8 @@ These decisions are locked per CLAUDE.md. Changing any requires discussion:
 | Model (dev) | MiniMax-M2.7 (API fallback) | No GPU required, quick iteration |
 | Data engine | DuckDB on Parquet | Embedded, column-oriented, single query engine |
 | Semantic layer | Single YAML file (hand-written) | Simple, no tooling overhead, easy to version |
-| UI | Streamlit (primary) + Next.js (secondary) | Free hosting, rapid iteration, good for demos |
-| Hosting | HF Spaces (primary) + Streamlit Cloud (backup) | Free, simple, community-friendly |
+| UI | Next.js frontend + FastAPI backend | Modern stack, full SSE streaming, resizable sidebar |
+| Hosting | HF Spaces via Docker | Free, simple, community-friendly |
 | License | MIT | Open-source, permissive |
 
 If a task seems to require changing one of these, pause and ask before proceeding.
@@ -779,7 +729,7 @@ If a task seems to require changing one of these, pause and ask before proceedin
 2. **Investigation latency** — Agent might take 60–120 seconds on a fallback model. Frame demos as "minutes vs hours," not "60 seconds."
 3. **GPU availability** — The MI300X droplet costs $1.99/hr. Use `MODEL_BACKEND=replay` when the GPU is off.
 4. **Concurrent requests** — HF Spaces free tier queues additional requests (no parallelism). For production, use a dedicated server.
-5. **Replay maintenance** — Scenarios must be re-recorded if the agent loop changes significantly.
+5. **Concurrent requests** — HF Spaces free tier may queue additional requests. For sustained load, use a dedicated server.
 
 ---
 
@@ -789,6 +739,5 @@ If a task seems to require changing one of these, pause and ask before proceedin
 - AMD Developer Cloud docs: https://www.amd.com/en/developer/resources/cloud-access/amd-developer-cloud.html
 - LangGraph docs: https://langchain-ai.github.io/langgraph/
 - vLLM on ROCm: https://docs.vllm.ai/en/latest/getting_started/amd-installation.html
-- Streamlit Cloud: https://share.streamlit.io
 - MiniMax API: https://platform.minimaxi.chat/
 - Hugging Face Spaces: https://huggingface.co/spaces
