@@ -5,7 +5,7 @@ import { useState } from "react";
 const QUESTIONS = [
   "Why did campaign 230 underperform campaign 150?",
   "Why did many email conversions happen within a minute of send?",
-  "Why did campaign 361 convert 60x better than campaign 296?"
+  "Recipients who got more messages converted better or worse than those who got less messages? Does sending more emails drive higher conversions?"
 ];
 
 interface Props { onSelect: (q: string) => void; disabled: boolean; }

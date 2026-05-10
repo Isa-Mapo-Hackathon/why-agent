@@ -425,8 +425,11 @@ def report(state: InvestigationState) -> InvestigationState:
         f"**5. Confidence.** high / medium / low — and one sentence on what "
         f"would raise your confidence (data you don't have, queries you didn't "
         f"run, etc.).\n\n"
-        f"**6. Next steps.** What an analyst should do next — including "
-        f"investigations that require data outside this dataset.\n\n"
+        f"**6. Next steps.** 3–5 concrete actions an analyst should take next. "
+        f"For each, name the action type (e.g., A/B test, instrumentation, "
+        f"data request, follow-up query, qualitative review), state what it "
+        f"would prove or rule out, and note any data needed beyond this "
+        f"dataset.\n\n"
         f"Make sure to mention any hypotheses that were investigated and ruled "
         f"out — that's part of showing rigor."
     )
