@@ -148,7 +148,7 @@ export default function Home() {
             className={`w-2 h-2 rounded-full transition-colors ${streaming ? "bg-violet-400 animate-pulse" : "bg-emerald-400"}`}
           />
           <span className="text-xs font-mono text-violet-400">
-            {streaming ? "investigating" : "ready"}
+            {streaming ? "Investaging" : "ready"}
           </span>
         </div>
         <div className="px-5 py-2.5 border-t border-frame">
