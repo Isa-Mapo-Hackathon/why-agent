@@ -68,24 +68,6 @@ Our wedge in one sentence:
 
 ## 4. Architecture overview
 
-```
-Judge / user                            Cost
-│                                  ────
-▼
-┌──────────────────────────────┐        $0
-│ HF Spaces (Docker)           │
-│ Next.js frontend             │
-│ FastAPI backend              │
-│ Agent + tools + data         │
-└──────────────┬───────────────┘
-               │ HTTPS, OpenAI-compat
-               ▼
-┌──────────────────────────────┐        $1.99/hr
-│ AMD MI300X droplet           │        (when ON)
-│ vLLM + Qwen3-30B-A3B         │
-└──────────────────────────────┘
-```
-
 ![Architecture diagram](docs/why-agent-architecture.png)
 
 **Three logical pieces:**

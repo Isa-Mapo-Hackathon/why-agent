@@ -38,10 +38,6 @@ pyrightconfig.json
 data/parquet/
 data/dev/*.parquet
 
-# Binary assets (HF Spaces rejects these — use xet or store separately)
-docs/*.png
-docs/*.jpg
-docs/*.gif
 
 # Frontend build artifacts
 client/frontend/.next/
